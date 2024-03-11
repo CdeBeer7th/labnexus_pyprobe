@@ -5,11 +5,10 @@ Author: Coenraad de Beer
 
 """
 
-import setuptools
 from setuptools import setup
 
 setup(
-    name="labnexus_pyprobe",
+    name="install",
     version="0.1",
     description="Experimental data automated sync",
     url="https://github.com/CdeBeer7th/labnexus_pyprobe",
