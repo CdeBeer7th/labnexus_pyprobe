@@ -1,1 +1,1 @@
-from labnexus_pyprobe.main import *
+from .main import *

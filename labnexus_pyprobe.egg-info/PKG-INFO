@@ -1,0 +1,9 @@
+Metadata-Version: 2.1
+Name: labnexus_pyprobe
+Version: 0.1
+Summary: Experimental data automated sync
+Author: de Beer, Coenraad
+Author-email: coenraad.debeer@gmail.com
+Requires-Dist: argparse
+Requires-Dist: datetime
+Requires-Dist: requests
