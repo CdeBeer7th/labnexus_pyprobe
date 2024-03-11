@@ -12,7 +12,7 @@ setup(
     description="Experimental data automated sync",
     author="de Beer, Coenraad",
     author_email="coenraad.debeer@gmail.com",
-    py_modules=['labnexus_pyprobe'],
+    packages=setuptools.find_packages(),
     install_requires=[
         "argparse",
         "datetime",
