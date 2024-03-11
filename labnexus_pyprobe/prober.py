@@ -1,3 +1,11 @@
+import argparse
+import os
+from datetime import datetime
+
+import requests
+from .prober import *
+
+
 def FileWatcher(dir_path, server_url):
 
     logged = False
@@ -88,13 +96,10 @@ def FileWatcher(dir_path, server_url):
 This module implements a file watcher that monitors a directory for new files
 and sends them to a LabNexus server.
 """
-if __name__ == "__main__":
-    import argparse
-    import os
-    from datetime import datetime
 
-    import requests
 
+def main():
+        
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "directory",
@@ -110,3 +115,6 @@ if __name__ == "__main__":
     server_domain = args.server
 
     FileWatcher(dir_path=probe_path, server_url=server_domain)
+
+if __name__ == '__main__':
+    main()
