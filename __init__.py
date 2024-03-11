@@ -1,1 +1,1 @@
-from . import main
+from .file_prober import *
