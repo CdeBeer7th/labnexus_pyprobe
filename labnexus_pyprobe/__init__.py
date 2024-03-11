@@ -1,1 +1,1 @@
-# import labnexus_pyprobe.file_prober
+from labnexus_pyprobe.main import *
