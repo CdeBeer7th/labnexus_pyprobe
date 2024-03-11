@@ -8,13 +8,19 @@ pyProbe will automatically upload your data to the server so you don't have to!
 
 # Setup Example:
 
+Bash:
+
 ```
 python -m pip install git+"https://github.com/CdeBeer7th/labnexus_pyprobe"
-
 python -m labnexus_pyprobe [directory] "[server:port]"
 ```
 
-Now the prober will continuously monitor the specified directory for new files.
+Stout:
+
+> Enter your LabNexus email here: me@email.com
+> Enter your account password here: StRoNgPa$$
+
+Now the prober will continuously monitor the specified directory for new files and upload them to the server.
 
 # DEV
 
