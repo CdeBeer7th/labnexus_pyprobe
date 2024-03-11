@@ -30,4 +30,4 @@ Just kill the process when it's not needed. On restart, a new session is created
 
 - Check contents of files and if they changed (after overwrites).
 - Able to specify certain file types only.
-- store login vars?
+- store login vars? .env file?
