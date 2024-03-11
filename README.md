@@ -18,6 +18,8 @@ python -m labnexus_pyprobe [directory] "[server:port]"
 Stout:
 
 > Enter your LabNexus email here: me@email.com
+>
+>
 > Enter your account password here: StRoNgPa$$
 
 Now the prober will continuously monitor the specified directory for new files and upload them to the server.
