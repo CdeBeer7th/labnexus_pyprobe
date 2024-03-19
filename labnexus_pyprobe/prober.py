@@ -115,5 +115,3 @@ def main():
 
     FileWatcher(dir_path=probe_path, server_url=server_domain)
 
-if __name__ == '__main__':
-    main()
