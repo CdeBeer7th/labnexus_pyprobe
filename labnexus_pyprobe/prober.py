@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import requests
-from .prober import *
+# from .prober import *
 
 
 def FileWatcher(dir_path, server_url):
