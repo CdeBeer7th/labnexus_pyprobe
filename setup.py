@@ -12,7 +12,7 @@ setup(
     description="Experimental data automated sync",
     author="de Beer, Coenraad",
     author_email="coenraad.debeer@gmail.com",
-    py_modules=['prober', '__main__'],
+    # py_modules=['prober', '__main__'],
     install_requires=[
         "argparse",
         "datetime",
