@@ -1,3 +1,3 @@
-from .prober import main
+from .prober import main as pmain
 
-main()
+pmain()
