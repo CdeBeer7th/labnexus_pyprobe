@@ -62,7 +62,7 @@ def FileWatcher(dir_path, server_url):
                     with open(file_path, "rb") as file:
                         # Send a PUT request to the server with the file data
                         response = requests.post(
-                            f"{server_url}/files/upload/pyprobe",
+                            f"http://{server_url}/files/upload/pyprobe",
                             files={"file": file},
                             headers=headers,
                         )
