@@ -11,10 +11,18 @@ setup(
     description="Experimental data automated sync",
     author="de Beer, Coenraad",
     author_email="coenraad.debeer@gmail.com",
-    py_modules=['labnexus_pyprobe'],
+    
+    packages=['labnexus_pyprobe'],
+    entry_points={
+        'console_scripts': [
+            'labnexus_pyprobe = labnexus_pyprobe.__main__:main',
+        ],
+    },
     install_requires=[
         "argparse",
         "datetime",
         "requests"
     ]
 )
+
+
