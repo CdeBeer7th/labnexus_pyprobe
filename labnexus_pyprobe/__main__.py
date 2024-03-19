@@ -1,4 +1,3 @@
-from .prober import *
-from .prober import main as pmain
+from labnexus_pyprobe.prober import *
 
-pmain()
+main()
