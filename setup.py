@@ -7,7 +7,7 @@ from setuptools import setup
 
 setup(
     name="labnexus_pyprobe",
-    version="0.2",
+    version="0.2.1",
     description="Experimental data automated sync",
     author="de Beer, Coenraad",
     author_email="coenraad.debeer@gmail.com",

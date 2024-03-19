@@ -17,7 +17,7 @@ def FileWatcher(dir_path, server_url):
         print(username, password)
         try:
             response = requests.post(
-                f"{server_url}/auth/jwt/login",
+                f"http://{server_url}/auth/jwt/login",
                 data={"username": username, "password": password},
             )
             print(response)
