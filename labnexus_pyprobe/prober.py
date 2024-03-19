@@ -60,11 +60,10 @@ def FileWatcher(dir_path, server_url):
                     print("Found new file", file_name)
                     print(file_path)
                     with open(file_path, "rb") as file:
-                        files = {"file": file}
                         # Send a PUT request to the server with the file data
                         response = requests.post(
                             f"{server_url}/files/upload/pyprobe",
-                            files=files,
+                            files={"file": file},
                             headers=headers,
                         )
 
