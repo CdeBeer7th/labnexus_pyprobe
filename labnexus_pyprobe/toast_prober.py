@@ -8,8 +8,13 @@ from win10toast import ToastNotifier
 
 
 def FileWatcher(dir_path, server_url):
-
     toaster = ToastNotifier()
+    toaster.show_toast(
+                "pyProbe",  # Notification title
+                "pyProbe is running...",  # Notification message
+            #  icon_path="path\to\your\icon.ico"
+            )
+    
     logged = False
 
     while not logged:

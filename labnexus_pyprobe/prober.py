@@ -33,6 +33,7 @@ def FileWatcher(dir_path, server_url):
 
     # Set the headers for the PUT request (if needed)
     # headers = {'Content-Type': 'application/octet-stream'}
+            
     last_processed_files = []
     while logged:
         # Keep track of the last processed file
@@ -81,11 +82,7 @@ def FileWatcher(dir_path, server_url):
                         print(
                             f"Error uploading file {file_name}: {response.status_code} - {response.text}",
                         )
-                        toaster.show_toast(
-                            "pyProbe - Upload Error",  # Notification title
-                            f"Error uploading file {file_name}: {response.status_code} - {response.text}"
-                            #  icon_path="path\to\your\icon.ico"
-                        )
+                       
                 except Exception as e:
                     print(f"Error opening/processing file {file_name}: {e}")
                     
