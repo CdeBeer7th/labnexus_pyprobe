@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 import requests
-# from .prober import *
+
 
 
 def FileWatcher(dir_path, server_url):
@@ -14,7 +14,6 @@ def FileWatcher(dir_path, server_url):
 
         username = input("Enter your LabNexus email here:")
         password = input("Enter your account password here:")
-        print(username, password)
         try:
             response = requests.post(
                 f"http://{server_url}/auth/jwt/login",
@@ -26,8 +25,10 @@ def FileWatcher(dir_path, server_url):
             print(
                 "Stored token, pyProbe has successfully opened a session with the server.",
             )
+            
             logged = True
         except Exception as e:
+            
             print(e)
 
     # Set the headers for the PUT request (if needed)
@@ -38,6 +39,7 @@ def FileWatcher(dir_path, server_url):
         # dir_path = Path(dir_path)
         while True:
             print("Checking for new files in directory:", dir_path)
+            
             # Get a list of all files in the directory
             files = os.listdir(dir_path)
             # Sort files by modification time (newest first)
@@ -57,7 +59,8 @@ def FileWatcher(dir_path, server_url):
 
                 try:
                     # Open the file in binary mode
-                    print("Found new file", file_name)
+                    
+                    print("Found new file, uploading", file_name)
                     print(file_path)
                     with open(file_path, "rb") as file:
                         # Send a PUT request to the server with the file data
@@ -69,6 +72,7 @@ def FileWatcher(dir_path, server_url):
 
                     # Check if the request was successful
                     if response.status_code == 200:
+                        
                         print(
                             f"File {file_name} uploaded successfully at {datetime.now()}",
                         )
@@ -77,10 +81,14 @@ def FileWatcher(dir_path, server_url):
                         print(
                             f"Error uploading file {file_name}: {response.status_code} - {response.text}",
                         )
-
+                        toaster.show_toast(
+                            "pyProbe - Upload Error",  # Notification title
+                            f"Error uploading file {file_name}: {response.status_code} - {response.text}"
+                            #  icon_path="path\to\your\icon.ico"
+                        )
                 except Exception as e:
-                    print(f"Error processing file {file_name}: {e}")
-
+                    print(f"Error opening/processing file {file_name}: {e}")
+                    
                 # Exit the loop after processing the newest file
                 break
 
