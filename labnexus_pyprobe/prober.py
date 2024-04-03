@@ -9,8 +9,10 @@ from win10toast import ToastNotifier
 
 
 def FileWatcher(dir_path, server_url):
+
     os_name = platform.system()
     logged = False
+
     if os_name == "Linux":
         while not logged:
 
@@ -96,7 +98,9 @@ def FileWatcher(dir_path, server_url):
                 import time
 
                 time.sleep(5)
+
     elif os_name == "Windows":
+        
         toaster = ToastNotifier()
         toaster.show_toast(
                     "pyProbe",  # Notification title
