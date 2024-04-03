@@ -217,6 +217,8 @@ def FileWatcher(dir_path, server_url):
                 import time
 
                 time.sleep(5)
+    else:
+        print(f"Unsupported OS: {os_name}")
 
 
 """
