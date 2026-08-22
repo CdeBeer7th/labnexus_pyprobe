@@ -6,9 +6,9 @@ from labnexus_pyprobe.watcher import Watcher
 
 
 def make(server, tmp_path, **kwargs):
-    settings = Settings(
-        directory=tmp_path,
-        server=normalise_server(server),
+    settings = Settings.single(
+        tmp_path,
+        normalise_server(server),
         min_age=0,
         state_file=tmp_path / "state.json",
         **kwargs,

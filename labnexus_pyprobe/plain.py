@@ -16,6 +16,7 @@ LEVELS = {
     "error": logging.ERROR,
     "failed": logging.WARNING,
     "scan": logging.DEBUG,
+    "parsed": logging.DEBUG,
     "skipped": logging.INFO,
 }
 
@@ -65,8 +66,9 @@ def run(watcher: Watcher) -> None:
         watcher.stop()
     stats = watcher.stats
     log.info(
-        "Session closed: %d uploaded, %d failed, %s sent.",
+        "Session closed: %d uploaded (%d parsed), %d failed, %s sent.",
         stats.uploaded,
+        stats.parsed,
         stats.failed,
         human_size(stats.bytes_sent),
     )

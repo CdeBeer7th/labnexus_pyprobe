@@ -9,7 +9,9 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
-from .config import DEFAULT_EXCLUDES, Settings, normalise_server
+from labnexus_plate_parsers import SpectrometerModel, UnknownModel, patterns_for, resolve_model
+
+from .config import DEFAULT_EXCLUDES, Queue, Settings, normalise_server
 
 PROG = "labnexus-pyprobe"
 
@@ -20,6 +22,8 @@ environment variables:
   LABNEXUS_EMAIL       default for --email
   LABNEXUS_PASSWORD    password to use instead of prompting
   LABNEXUS_TOKEN       existing access token, skips the login step
+  LABNEXUS_WORKSPACE   default for --workspace
+  LABNEXUS_SPECTROMETER  default for --spectrometer
 
 examples:
   # no arguments: open the desktop window and pick the folder and server there
@@ -36,6 +40,18 @@ examples:
 
   # see what would be uploaded without sending anything
   labnexus-pyprobe ~/data lab.example.com --dry-run
+
+  # one folder per instrument, each parsed at the bench before upload
+  labnexus-pyprobe -s lab.example.com -w WORKSPACE_ID \\
+      -Q ~/readers/spark=tecan-spark \\
+      -Q ~/readers/epoch=biotek-epoch-2 \\
+      -Q ~/readers/skanit=multiskan-skyhigh
+
+  # a single spectrometer folder, the short way
+  labnexus-pyprobe ~/readers/spark lab.example.com -m tecan-spark -w WORKSPACE_ID
+
+  # which instruments are supported, and what each one exports
+  labnexus-pyprobe --list-models
 
   # unattended, logging to a file, credentials from the environment
   LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \\
@@ -101,6 +117,42 @@ def build_parser() -> argparse.ArgumentParser:
         "--check",
         action="store_true",
         help="log in, report whether the server is reachable, then exit",
+    )
+
+    conn.add_argument(
+        "-w",
+        "--workspace",
+        metavar="ID",
+        help="workspace to file uploads under (required for spectrometer queues)",
+    )
+    conn.add_argument(
+        "--list-workspaces",
+        action="store_true",
+        help="log in, print the workspaces you can upload into, then exit",
+    )
+
+    spec = parser.add_argument_group("spectrometers")
+    spec.add_argument(
+        "-Q",
+        "--queue",
+        action="append",
+        default=[],
+        metavar="PATH=MODEL",
+        help=(
+            "watch PATH for exports from MODEL; repeatable, one per instrument. "
+            "MODEL is any spelling of a supported model (see --list-models)"
+        ),
+    )
+    spec.add_argument(
+        "-m",
+        "--spectrometer",
+        metavar="MODEL",
+        help="instrument for the single folder given by DIRECTORY/--directory",
+    )
+    spec.add_argument(
+        "--list-models",
+        action="store_true",
+        help="print the supported instruments and what each one exports, then exit",
     )
 
     watch = parser.add_argument_group("what to watch")
@@ -211,33 +263,105 @@ def resolve_ui(args: argparse.Namespace, bare: bool = False) -> str:
     return "tui" if sys.stdout.isatty() else "plain"
 
 
-def build_settings(args: argparse.Namespace, parser: argparse.ArgumentParser, ui: str) -> Settings:
-    """Fold CLI args and environment into a Settings object, validating as we go."""
-    raw_dir = args.directory or args.directory_pos or os.environ.get("LABNEXUS_DIR")
-    raw_server = args.server or args.server_pos or os.environ.get("LABNEXUS_SERVER")
+def parse_queue_spec(
+    spec: str, parser: argparse.ArgumentParser
+) -> tuple[Path, SpectrometerModel | None]:
+    """Split one ``--queue PATH=MODEL`` value.
 
-    # The GUI can collect anything that's missing, so only the CLI front ends
-    # need these up front.
-    if ui != "gui":
-        if not raw_dir:
-            parser.error("no directory given (pass DIRECTORY, --directory or set LABNEXUS_DIR)")
-        if not raw_server:
-            parser.error("no server given (pass SERVER, --server or set LABNEXUS_SERVER)")
+    The model half is optional (``--queue ~/misc`` watches a folder with no
+    parsing), and ``rsplit`` is deliberate so a Windows path such as
+    ``C:\\data=tecan-spark`` splits on the right ``=``.
+    """
+    raw_path, sep, raw_model = spec.rpartition("=")
+    if not sep:
+        raw_path, raw_model = spec, ""
 
-    directory = Path(raw_dir).expanduser() if raw_dir else Path.cwd()
-    if ui != "gui" and not directory.is_dir():
-        parser.error(f"not a directory: {directory}")
+    path = Path(raw_path.strip()).expanduser()
+    if not str(path).strip():
+        parser.error(f"--queue needs a folder: {spec!r}")
 
+    if not raw_model.strip():
+        return path, None
+    try:
+        return path, resolve_model(raw_model.strip())
+    except UnknownModel as exc:
+        parser.error(f"--queue {spec!r}: {exc}")
+        raise  # unreachable; parser.error exits
+
+
+def build_queues(
+    args: argparse.Namespace, parser: argparse.ArgumentParser, ui: str
+) -> list[Queue]:
+    """Fold --queue, --directory and --spectrometer into the list of watched folders."""
     excludes = [] if args.no_default_excludes else list(DEFAULT_EXCLUDES)
     excludes.extend(args.exclude)
 
+    def make(directory: Path, model: SpectrometerModel | None) -> Queue:
+        return Queue(
+            directory=directory,
+            model=model,
+            # An explicit --pattern wins; otherwise a spectrometer queue takes
+            # the instrument's own extensions and a plain queue takes "*".
+            patterns=list(args.pattern),
+            excludes=list(excludes),
+            recursive=args.recursive,
+        )
+
+    queues = [make(path, model) for path, model in
+              (parse_queue_spec(spec, parser) for spec in args.queue)]
+
+    raw_dir = args.directory or args.directory_pos or os.environ.get("LABNEXUS_DIR")
+    raw_model = args.spectrometer or os.environ.get("LABNEXUS_SPECTROMETER")
+
+    if raw_dir:
+        model = None
+        if raw_model:
+            try:
+                model = resolve_model(raw_model)
+            except UnknownModel as exc:
+                parser.error(str(exc))
+        queues.append(make(Path(raw_dir).expanduser(), model))
+    elif raw_model and not queues:
+        parser.error("--spectrometer needs a folder (pass DIRECTORY or --directory)")
+
+    if not queues:
+        # The GUI can collect a folder itself; the CLI front ends cannot.
+        if ui != "gui":
+            parser.error(
+                "nothing to watch (pass DIRECTORY, --directory, --queue, or set LABNEXUS_DIR)"
+            )
+        queues.append(make(Path.cwd(), None))
+
+    if ui != "gui":
+        for queue in queues:
+            if not queue.directory.is_dir():
+                parser.error(f"not a directory: {queue.directory}")
+
+    return queues
+
+
+def build_settings(args: argparse.Namespace, parser: argparse.ArgumentParser, ui: str) -> Settings:
+    """Fold CLI args and environment into a Settings object, validating as we go."""
+    raw_server = args.server or args.server_pos or os.environ.get("LABNEXUS_SERVER")
+    if ui != "gui" and not raw_server:
+        parser.error("no server given (pass SERVER, --server or set LABNEXUS_SERVER)")
+
+    queues = build_queues(args, parser, ui)
+    workspace = args.workspace or os.environ.get("LABNEXUS_WORKSPACE")
+
+    # A parsed run is filed against a workspace; without one the server has
+    # nowhere to put it, and failing here beats failing on every upload.
+    if ui != "gui" and not workspace and any(q.model for q in queues):
+        parser.error(
+            "spectrometer queues need a workspace (pass --workspace or set "
+            "LABNEXUS_WORKSPACE; --list-workspaces shows the ones you can use)"
+        )
+
     settings = Settings(
-        directory=directory,
         server=normalise_server(raw_server, args.scheme) if raw_server else "",
+        queues=queues,
+        workspace_id=workspace,
         interval=max(1.0, args.interval),
-        patterns=args.pattern or ["*"],
-        excludes=excludes,
-        recursive=args.recursive,
         only_new=args.only_new,
         min_age=max(0.0, args.min_age),
         reupload_changed=not args.no_reupload_changed,
@@ -258,6 +382,17 @@ def build_settings(args: argparse.Namespace, parser: argparse.ArgumentParser, ui
     return settings
 
 
+def print_models() -> int:
+    """Answer "which instruments can this thing handle?" without a server."""
+    width = max(len(m.name) for m in SpectrometerModel)
+    print("Supported spectrometers (any spelling of either column is accepted):\n")
+    for model in SpectrometerModel:
+        globs = " ".join(patterns_for(model))
+        print(f"  {model.name:<{width}}  {model.value:<38}  {globs}")
+    print("\nUse with:  --queue PATH=MODEL   or   --spectrometer MODEL")
+    return 0
+
+
 def read_password(args: argparse.Namespace) -> str | None:
     if args.password_stdin:
         return sys.stdin.readline().rstrip("\n")
@@ -268,6 +403,11 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Answerable offline, so it runs before anything needs a server or a folder.
+    if args.list_models:
+        return print_models()
+
     ui = resolve_ui(args, bare=not argv)
     settings = build_settings(args, parser, ui)
     email = args.email or os.environ.get("LABNEXUS_EMAIL")
@@ -294,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        if args.list_workspaces:
+            return print_workspaces(client, email, token, password)
         if ui == "tui":
             return run_tui(settings, client, email, token, password, args)
         return run_plain(settings, client, email, token, password, args)
@@ -315,6 +457,24 @@ def _authenticate(client, email, token, password, login_prompt) -> str:
         client.login(email, password)
         return email
     return login_prompt(email)
+
+
+def print_workspaces(client, email, token, password) -> int:
+    """List the workspaces this account can upload into, with their ids."""
+    from .plain import prompt_login
+
+    _authenticate(client, email, token, password, lambda e: prompt_login(client, e))
+    spaces = client.workspaces()
+    if not spaces:
+        print("No workspaces available for this account.")
+        return 1
+
+    width = max(len(w.name) for w in spaces)
+    for workspace in spaces:
+        role = "owner" if workspace.owned else "shared"
+        print(f"  {workspace.name:<{width}}  {workspace.id}  ({role})")
+    print("\nUse with:  --workspace ID")
+    return 0
 
 
 def run_tui(settings, client, email, token, password, args) -> int:

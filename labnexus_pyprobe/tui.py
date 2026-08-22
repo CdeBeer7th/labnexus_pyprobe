@@ -113,12 +113,22 @@ class Dashboard:
         grid.add_column(style=MUTED, justify="right", no_wrap=True)
         grid.add_column(style="white", overflow="fold")
 
-        patterns = " ".join(self.settings.patterns)
-        excluded = len(self.settings.excludes)
-        mode = "recursive" if self.settings.recursive else "top level"
         grid.add_row("server", f"[{ACCENT}]{self.settings.server}[/]")
-        grid.add_row("watching", f"{self.settings.directory}  [{MUTED}]({mode})[/]")
-        grid.add_row("matching", f"{patterns}  [{MUTED}]- {excluded} exclusion(s)[/]")
+        if self.settings.workspace_id:
+            grid.add_row("workspace", self.settings.workspace_id)
+
+        # One row per queue: which folder, which instrument, what it matches.
+        for index, queue in enumerate(self.settings.queues):
+            mode = "recursive" if queue.recursive else "top level"
+            instrument = (
+                f"[{ACCENT}]{queue.model.value}[/]" if queue.model else f"[{MUTED}]any file[/]"
+            )
+            patterns = " ".join(queue.effective_patterns)
+            grid.add_row(
+                "watching" if index == 0 else "",
+                f"{queue.directory}  [{MUTED}]({mode})[/]\n"
+                f"  {instrument}  [{MUTED}]{patterns}[/]",
+            )
         grid.add_row(
             "session",
             f"{self.email or 'token'}  [green]connected[/]"

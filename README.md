@@ -5,19 +5,26 @@ Automatic experimental-data sync for your [LabNexus](https://github.com/CdeBeer7
 Point pyProbe at a folder, give it your server, and it uploads new files as they appear —
 in a live terminal dashboard, a desktop window, or silently in the background.
 
+Give a folder a **spectrometer** and it does more: the plate-reader export is parsed at
+the bench into a structured, validated document and uploaded as data, not just as a file.
+One folder per instrument, as many as you have readers.
+
 ```
 ╭─ pyProbe ───────────────────────────────────────────────────────────────╮
-│   server  http://lab.example.com:8000                                   │
-│ watching  /data/instrument-1  (top level)                               │
-│ matching  *.csv *.txt  - 8 exclusion(s)                                 │
-│  session  me@lab.org  connected                                         │
+│    server  http://lab.example.com:8000                                  │
+│ workspace  11111111-2222-3333-4444-555555555555                         │
+│  watching  /data/spark  (top level)                                     │
+│              Tecan Spark  *.xlsx *.xls                                  │
+│            /data/epoch  (top level)                                     │
+│              Agilent Biotek Epoch 2  *.xlsx *.xls                       │
+│   session  me@lab.org  connected                                        │
 ╰─────────────────────────────────────────────────────────────────────────╯
  time      file                          size  status  detail
- 10:04:12  run_014.csv                  2.1 MB  OK
- 10:04:17  run_015.csv                  1.8 MB  OK
- 10:04:22  notes.txt                    4.0 KB  FAIL    HTTP 413 - too large
+ 10:04:12  NAD_run1.xlsx                40.7 KB  OK     1 group, 45 series
+ 10:04:17  plate_A.xlsx                 70.8 KB  OK     1 group, 36 series
+ 10:04:22  draft.xlsx                    4.0 KB  FAIL   Tecan Spark: no data header
 ─────────────────────────────────────────────────────────────────────────────
-⠙ watching          2 uploaded - 1 failed - 3.9 MB - up 0:14 - next scan 3s
+⠙ watching          2 uploaded - 1 failed - 111 KB - up 0:14 - next scan 3s
 ```
 
 ## Install
@@ -78,6 +85,65 @@ LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \
 labnexus-pyprobe ~/data lab.example.com --check
 ```
 
+### Spectrometers
+
+A **queue** is a folder plus the instrument that writes into it. Give each reader its own
+drop folder and pyProbe parses each one as the right vendor format:
+
+```bash
+labnexus-pyprobe -s lab.example.com -w WORKSPACE_ID \
+    -Q ~/readers/spark=tecan-spark \
+    -Q ~/readers/epoch=biotek-epoch-2 \
+    -Q ~/readers/spectramax=spectramax-190
+```
+
+With one instrument, `--spectrometer` is shorter:
+
+```bash
+labnexus-pyprobe ~/readers/spark lab.example.com -m tecan-spark -w WORKSPACE_ID
+```
+
+What this changes:
+
+- **The upload is structured data.** Each export is parsed into a validated
+  `UnifiedPlateReaderOutput` — instrument and software metadata, per-well series, shared
+  time/wavelength axes — and sent alongside the original file. The server re-validates it
+  and files both.
+- **A queue only picks up its instrument's exports.** A Tecan Spark folder matches
+  `*.xlsx`/`*.xls` and a SpectraMax folder matches `*.txt`, without you saying so. An
+  explicit `-p/--pattern` still overrides it.
+- **A file that won't parse is never uploaded.** It's reported and retried on the next
+  scan, so a half-written export sorts itself out once the instrument finishes.
+- **`--dry-run` still parses**, so you can see exactly what a folder produces before
+  sending anything.
+
+Parsing happens at the bench using
+[labnexus-plate-parsers](https://github.com/CdeBeer7th/labnexus_plate_parsers), the same
+package the server runs — so the structured output is identical either way.
+
+```bash
+labnexus-pyprobe --list-models        # supported instruments and their file types
+labnexus-pyprobe --list-workspaces -s lab.example.com -e me@lab.org
+```
+
+| Instrument | `--queue PATH=MODEL` | Exports |
+| --- | --- | --- |
+| ThermoFischer Multiskan SkyHigh | `multiskan-skyhigh` | `*.xlsx` `*.xls` |
+| BMG Labtech SPECTROStar Nano | `spectrostar-nano` | `*.xlsx` `*.xls` |
+| Tecan Spark | `tecan-spark` | `*.xlsx` `*.xls` |
+| Tecan Spark (SparkControl) | `tecan-spark-control` | `*.xlsx` `*.xls` |
+| Tecan Magellan | `tecan-magellan` | `*.xlsx` `*.xls` |
+| Agilent Biotek Epoch 2 | `biotek-epoch-2` | `*.xlsx` `*.xls` |
+| Molecular Devices SpectraMax 190 | `spectramax-190` | `*.txt` |
+| ThermoFischer Multiskan Spectrum 1500 | `multiskan-spectrum-1500` | `*.txt` |
+
+Spelling is forgiving — `tecan-spark`, `tecanSpark`, `TECAN SPARK` and `Tecan Spark` all
+resolve to the same instrument.
+
+Spectrometer queues need a `--workspace`: that is what the server files the parsed run
+under. `--list-workspaces` prints the ids you can use. Folders given without an
+instrument keep working exactly as before — plain file upload, no workspace needed.
+
 Run `labnexus-pyprobe --help` for the full list of options.
 
 ### Interfaces
@@ -119,6 +185,8 @@ again. Pass `--no-reupload-changed` if you only ever want each filename sent onc
 | `LABNEXUS_EMAIL` | `--email` |
 | `LABNEXUS_PASSWORD` | password, instead of prompting |
 | `LABNEXUS_TOKEN` | an existing access token — skips login entirely |
+| `LABNEXUS_WORKSPACE` | `--workspace` |
+| `LABNEXUS_SPECTROMETER` | `--spectrometer` |
 
 ## Development
 
@@ -141,9 +209,9 @@ uv run labnexus-pyprobe --help
 | Module | Responsibility |
 | --- | --- |
 | `cli.py` | Argument parsing, environment defaults, front-end selection |
-| `config.py` | `Settings`: what to watch, include/exclude matching |
-| `client.py` | LabNexus HTTP: login, token, uploads with retries |
-| `watcher.py` | The scan loop, change detection, upload history — emits `ProbeEvent`s |
+| `config.py` | `Queue` (a folder + its instrument) and `Settings`: what to watch |
+| `client.py` | LabNexus HTTP: login, workspaces, plain and structured uploads |
+| `watcher.py` | The scan loop, parsing, change detection, history — emits `ProbeEvent`s |
 | `tui.py` | Rich terminal dashboard |
 | `gui.py` | Tkinter desktop window |
 | `plain.py` | Plain logging front end |
@@ -152,3 +220,9 @@ uv run labnexus-pyprobe --help
 
 Every front end consumes the same `ProbeEvent` stream from `watcher.py`, so behaviour
 can't drift between them.
+
+Parsers are **not** in this repo. They live in
+[labnexus-plate-parsers](https://github.com/CdeBeer7th/labnexus_plate_parsers), which both
+pyProbe and the LabNexus server depend on, so the two cannot disagree about what a file
+means. `uv sync` picks it up from the sibling checkout configured in
+`[tool.uv.sources]`; clone it next to this repo.

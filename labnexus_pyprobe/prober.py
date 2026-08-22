@@ -21,9 +21,9 @@ __all__ = ["FileWatcher", "main"]
 
 def FileWatcher(dir_path: str, server_url: str) -> None:  # noqa: N802 - legacy name
     """Prompt for credentials and watch ``dir_path``, uploading to ``server_url``."""
-    settings = Settings(
-        directory=Path(dir_path).expanduser(),
-        server=normalise_server(server_url),
+    settings = Settings.single(
+        Path(dir_path).expanduser(),
+        normalise_server(server_url),
     )
     settings.state_file = settings.default_state_file()
 
