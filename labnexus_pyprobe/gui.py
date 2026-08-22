@@ -44,10 +44,17 @@ STATUS_TAGS = {
 class ProbeWindow(tk.Tk):
     """The pyProbe control window: configure a session, start it, watch it work."""
 
-    def __init__(self, settings: Settings, email: str = "", version: str = "") -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        email: str = "",
+        version: str = "",
+        scheme: str = "http",
+    ) -> None:
         super().__init__()
         self.settings = settings
         self.version = version
+        self.scheme = scheme
         self.events: queue.Queue[ProbeEvent] = queue.Queue()
         self.watcher: Watcher | None = None
         self.worker: threading.Thread | None = None
@@ -61,6 +68,7 @@ class ProbeWindow(tk.Tk):
         self._init_vars(email)
         self._init_style()
         self._build()
+        self._focus_first_gap()
         self.after(100, self._drain)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -77,7 +85,7 @@ class ProbeWindow(tk.Tk):
         self.var_recursive = tk.BooleanVar(value=s.recursive)
         self.var_only_new = tk.BooleanVar(value=s.only_new)
         self.var_notify = tk.BooleanVar(value=s.notify)
-        self.var_status = tk.StringVar(value="Idle - fill in the details and press Start.")
+        self.var_status = tk.StringVar(value="Idle - choose a folder and server, then press Start.")
         self.var_counts = tk.StringVar(value="")
 
     def _init_style(self) -> None:
@@ -99,6 +107,7 @@ class ProbeWindow(tk.Tk):
             "Section.TLabel", background=PANEL, foreground=ACCENT, font=("Segoe UI", 9, "bold")
         )
         style.configure("Status.TLabel", background=PANEL, foreground=MUTED, font=("Segoe UI", 9))
+        style.configure("Hint.TLabel", background=PANEL, foreground=MUTED, font=("Segoe UI", 8))
 
         style.configure(
             "TEntry",
@@ -211,6 +220,23 @@ class ProbeWindow(tk.Tk):
         entry.grid(row=row, column=1, columnspan=span, sticky="ew", pady=4)
         return entry
 
+    def _hint(self, card: ttk.Frame, text: str, row: int) -> None:
+        ttk.Label(card, text=text, style="Hint.TLabel").grid(
+            row=row, column=1, columnspan=2, sticky="w", pady=(0, 4)
+        )
+
+    def _focus_first_gap(self) -> None:
+        """Put the cursor in the first thing the user still has to fill in."""
+        gaps = (
+            (self.entry_server, self.var_server),
+            (self.entry_folder, self.var_folder),
+        )
+        for entry, var in gaps:
+            if not var.get().strip():
+                entry.focus_set()
+                return
+        self.btn_start.focus_set()
+
     def _build_form(self, parent: ttk.Frame) -> ttk.Frame:
         wrap = ttk.Frame(parent)
         wrap.columnconfigure(0, weight=1, uniform="col")
@@ -218,22 +244,24 @@ class ProbeWindow(tk.Tk):
 
         conn = self._card(wrap, "Connection")
         conn.columnconfigure(1, weight=1)
-        self._field(conn, "Server", self.var_server, 1)
-        self._field(conn, "Email", self.var_email, 2)
-        self._field(conn, "Password", self.var_password, 3, show="•")
+        self.entry_server = self._field(conn, "Server", self.var_server, 1)
+        self._hint(conn, f"host, host:port or a full URL ({self.scheme}:// is assumed)", 2)
+        self._field(conn, "Email", self.var_email, 3)
+        self._field(conn, "Password", self.var_password, 4, show="•")
         conn.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
 
         watch = self._card(wrap, "Watch")
         watch.columnconfigure(1, weight=1)
-        self._field(watch, "Folder", self.var_folder, 1, span=1)
+        self.entry_folder = self._field(watch, "Folder", self.var_folder, 1, span=1)
         ttk.Button(watch, text="Browse", style="Browse.TButton", command=self._pick_folder).grid(
             row=1, column=2, sticky="e", padx=(8, 0), pady=4
         )
-        self._field(watch, "Patterns", self.var_patterns, 2)
-        self._field(watch, "Every (s)", self.var_interval, 3, width=6, span=1)
+        self._hint(watch, "every new file dropped in here is uploaded", 2)
+        self._field(watch, "Patterns", self.var_patterns, 3)
+        self._field(watch, "Every (s)", self.var_interval, 4, width=6, span=1)
 
         toggles = ttk.Frame(watch, style="Card.TFrame")
-        toggles.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        toggles.grid(row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
         for col, (text, var) in enumerate(
             (
                 ("Subfolders", self.var_recursive),
@@ -325,7 +353,7 @@ class ProbeWindow(tk.Tk):
         return replace(
             self.settings,
             directory=folder,
-            server=normalise_server(self.var_server.get()),
+            server=normalise_server(self.var_server.get(), self.scheme),
             interval=interval,
             patterns=patterns,
             excludes=list(self.settings.excludes or DEFAULT_EXCLUDES),
@@ -441,10 +469,12 @@ class ProbeWindow(tk.Tk):
         self.destroy()
 
 
-def run_gui(settings: Settings, email: str = "", version: str = "") -> int:
+def run_gui(
+    settings: Settings, email: str = "", version: str = "", scheme: str = "http"
+) -> int:
     """Entry point for ``--gui``. Returns a process exit code."""
     try:
-        window = ProbeWindow(settings, email=email, version=version)
+        window = ProbeWindow(settings, email=email, version=version, scheme=scheme)
     except tk.TclError as exc:
         print(f"Could not open a window ({exc}). Run without --gui for the terminal UI.")
         return 1

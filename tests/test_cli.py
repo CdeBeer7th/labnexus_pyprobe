@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 
+from labnexus_pyprobe import cli
 from labnexus_pyprobe.cli import build_parser, build_settings, resolve_ui
 
 
@@ -76,3 +79,58 @@ def test_no_state_disables_history(tmp_path):
 def test_resolve_ui(argv, expected, tmp_path):
     _, args = parse(str(tmp_path), "lab.example", *argv)
     assert resolve_ui(args) == expected
+
+
+def test_bare_invocation_opens_the_gui(monkeypatch):
+    monkeypatch.setattr(cli, "gui_available", lambda: True)
+    _, args = parse()
+    assert resolve_ui(args, bare=True) == "gui"
+
+
+def test_bare_invocation_falls_back_without_a_display(monkeypatch):
+    monkeypatch.setattr(cli, "gui_available", lambda: False)
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: False, raising=False)
+    _, args = parse()
+    assert resolve_ui(args, bare=True) == "plain"
+
+
+def test_arguments_keep_the_terminal_front_end(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "gui_available", lambda: True)
+    _, args = parse(str(tmp_path), "lab.example", "--plain")
+    assert resolve_ui(args, bare=False) == "plain"
+
+
+def test_explicit_ui_choice_beats_the_bare_default(monkeypatch):
+    monkeypatch.setattr(cli, "gui_available", lambda: True)
+    _, args = parse("--ui", "plain")
+    assert resolve_ui(args, bare=True) == "plain"
+
+
+def test_main_with_no_args_launches_the_gui(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "gui_available", lambda: True)
+    monkeypatch.setenv("LABNEXUS_DIR", str(tmp_path))
+    monkeypatch.setenv("LABNEXUS_SERVER", "env.example:9000")
+    monkeypatch.delenv("LABNEXUS_EMAIL", raising=False)
+
+    seen = {}
+
+    def fake_run_gui(settings, email="", version="", scheme="http"):
+        seen.update(settings=settings, email=email, scheme=scheme)
+        return 0
+
+    monkeypatch.setattr("labnexus_pyprobe.gui.run_gui", fake_run_gui)
+    assert cli.main([]) == 0
+    assert seen["settings"].directory == tmp_path
+    assert seen["settings"].server == "http://env.example:9000"
+    assert seen["scheme"] == "http"
+
+
+def test_gui_starts_with_blank_server_and_cwd(monkeypatch, tmp_path):
+    """With nothing configured at all the window still opens, ready to be filled in."""
+    monkeypatch.delenv("LABNEXUS_DIR", raising=False)
+    monkeypatch.delenv("LABNEXUS_SERVER", raising=False)
+    monkeypatch.chdir(tmp_path)
+    parser, args = parse()
+    settings = build_settings(args, parser, "gui")
+    assert settings.server == ""
+    assert settings.directory == Path.cwd()

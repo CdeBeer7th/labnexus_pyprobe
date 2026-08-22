@@ -42,6 +42,15 @@ uv tool install "labnexus-pyprobe[notify] @ git+https://github.com/CdeBeer7th/la
 
 ## Use
 
+Run it with no arguments and the desktop window opens, where you pick the folder to
+watch and type the server address:
+
+```bash
+labnexus-pyprobe
+```
+
+Or give it both up front and stay in the terminal:
+
 ```bash
 labnexus-pyprobe ~/data lab.example.com:8000
 ```
@@ -55,8 +64,8 @@ A few common variations:
 # only CSV and TXT, including subfolders, scanned every 30 seconds
 labnexus-pyprobe -d ~/data -s lab.example.com -p '*.csv' -p '*.txt' -r -i 30
 
-# desktop window instead of the terminal
-labnexus-pyprobe --gui
+# desktop window with the form already filled in
+labnexus-pyprobe --gui -d ~/data -s lab.example.com:8000
 
 # see what would be uploaded, send nothing
 labnexus-pyprobe ~/data lab.example.com --dry-run
@@ -75,9 +84,15 @@ Run `labnexus-pyprobe --help` for the full list of options.
 
 | Flag | What you get |
 | --- | --- |
-| *(default)* | Live terminal dashboard when stdout is a terminal, plain logs otherwise |
+| *(no arguments)* | Desktop window, so there is somewhere to enter the folder and server |
+| *(any argument)* | Live terminal dashboard when stdout is a terminal, plain logs otherwise |
 | `--gui` | Desktop window: fill in the form, press Start, watch the log |
 | `--plain` | Timestamped log lines — for `nohup`, systemd, Task Scheduler, cron |
+
+`--gui` accepts the same options as the terminal front ends — `-d`, `-s`, `-p`, `-r`,
+`-i`, `--scheme` and so on prefill the form, and anything you leave out you fill in
+in the window. Where no window can be opened (a headless Linux box with no `DISPLAY`),
+the bare command falls back to the terminal front end.
 
 Desktop notifications are on by default and use whatever the OS provides
 (`notify-send` on Linux, `osascript` on macOS, toasts on Windows). `--no-notify` turns them off.

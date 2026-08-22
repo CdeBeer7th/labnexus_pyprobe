@@ -22,14 +22,17 @@ environment variables:
   LABNEXUS_TOKEN       existing access token, skips the login step
 
 examples:
+  # no arguments: open the desktop window and pick the folder and server there
+  labnexus-pyprobe
+
   # watch a folder, prompt for credentials, live terminal dashboard
   labnexus-pyprobe ~/data lab.example.com:8000
 
   # only CSV and TXT files, including subfolders, checked every 30s
   labnexus-pyprobe -d ~/data -s lab.example.com -p '*.csv' -p '*.txt' -r -i 30
 
-  # desktop window instead of the terminal
-  labnexus-pyprobe --gui
+  # desktop window, prefilled with a folder and server
+  labnexus-pyprobe --gui -d ~/data -s lab.example.com:8000
 
   # see what would be uploaded without sending anything
   labnexus-pyprobe ~/data lab.example.com --dry-run
@@ -165,7 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--ui",
         choices=("auto", "tui", "plain", "gui"),
         default="auto",
-        help="front end to use (default: auto - tui on a terminal, plain otherwise)",
+        help=(
+            "front end to use (default: auto - gui when run with no arguments, "
+            "tui on a terminal, plain otherwise)"
+        ),
     )
     ui.add_argument("-g", "--gui", action="store_true", help="shorthand for --ui gui")
     ui.add_argument("--plain", action="store_true", help="shorthand for --ui plain")
@@ -179,13 +185,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def resolve_ui(args: argparse.Namespace) -> str:
+def gui_available() -> bool:
+    """Whether a desktop window can plausibly be opened on this machine."""
+    try:
+        import tkinter  # noqa: F401
+    except Exception:  # pragma: no cover - depends on how Python was built
+        return False
+    if sys.platform.startswith(("linux", "freebsd")):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
+
+def resolve_ui(args: argparse.Namespace, bare: bool = False) -> str:
+    """Pick a front end. *bare* means the command was run with no arguments at all."""
     if args.gui:
         return "gui"
     if args.plain:
         return "plain"
     if args.ui != "auto":
         return args.ui
+    # Someone who just double-clicked the app, or typed the bare command, has
+    # nothing to configure a session with - give them the window that can ask.
+    if bare and gui_available():
+        return "gui"
     return "tui" if sys.stdout.isatty() else "plain"
 
 
@@ -243,9 +265,10 @@ def read_password(args: argparse.Namespace) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(argv)
-    ui = resolve_ui(args)
+    ui = resolve_ui(args, bare=not argv)
     settings = build_settings(args, parser, ui)
     email = args.email or os.environ.get("LABNEXUS_EMAIL")
     token = args.token or os.environ.get("LABNEXUS_TOKEN")
@@ -254,7 +277,12 @@ def main(argv: list[str] | None = None) -> int:
     if ui == "gui":
         from .gui import run_gui
 
-        return run_gui(settings, email=email or "", version=get_version())
+        return run_gui(
+            settings,
+            email=email or "",
+            version=get_version(),
+            scheme=args.scheme,
+        )
 
     from .client import AuthError, LabNexusClient
 
