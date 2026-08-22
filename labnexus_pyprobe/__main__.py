@@ -1,3 +1,8 @@
-from labnexus_pyprobe.prober import *
+"""``python -m labnexus_pyprobe``."""
 
-main()
+import sys
+
+from .cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())

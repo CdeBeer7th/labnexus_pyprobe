@@ -1,0 +1,60 @@
+[project]
+name = "labnexus-pyprobe"
+version = "0.3.0"
+description = "Watch a directory and automatically sync experimental data to a LabNexus server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Coenraad de Beer", email = "coenraad.debeer@gmail.com" }]
+keywords = ["labnexus", "laboratory", "data-sync", "file-watcher"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "requests>=2.31",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+# Native desktop notifications. Linux uses `notify-send` and macOS uses
+# `osascript`, both of which ship with the OS, so only Windows needs a package.
+notify = ["windows-toasts>=1.1.1; sys_platform == 'win32'"]
+
+[project.urls]
+Homepage = "https://github.com/CdeBeer7th/labnexus_pyprobe"
+Server = "https://github.com/CdeBeer7th/labnexus_server"
+
+[project.scripts]
+labnexus-pyprobe = "labnexus_pyprobe.cli:main"
+labnexus_pyprobe = "labnexus_pyprobe.cli:main"
+
+[project.gui-scripts]
+labnexus-pyprobe-gui = "labnexus_pyprobe.cli:main_gui"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["labnexus_pyprobe"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
