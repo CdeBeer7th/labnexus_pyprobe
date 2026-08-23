@@ -17,7 +17,7 @@ def test_positional_args_still_work(tmp_path):
     parser, args = parse(str(tmp_path), "lab.example.com:8000")
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == tmp_path
-    assert settings.server == "http://lab.example.com:8000"
+    assert settings.server == "https://lab.example.com:8000"
 
 
 def test_flags_override_positionals(tmp_path):
@@ -26,7 +26,7 @@ def test_flags_override_positionals(tmp_path):
     parser, args = parse(str(tmp_path), "a.example", "-d", str(other), "-s", "b.example")
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == other
-    assert settings.server == "http://b.example"
+    assert settings.server == "https://b.example"
 
 
 def test_env_fallback(tmp_path, monkeypatch):
@@ -35,7 +35,21 @@ def test_env_fallback(tmp_path, monkeypatch):
     parser, args = parse()
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == tmp_path
-    assert settings.server == "http://env.example:9000"
+    assert settings.server == "https://env.example:9000"
+
+
+def test_plain_http_is_refused_by_default(tmp_path):
+    parser, args = parse(str(tmp_path), "lab.example.com:8000", "--scheme", "http")
+    with pytest.raises(SystemExit):
+        build_settings(args, parser, "plain")
+
+
+def test_https_override_allows_plain_http(tmp_path):
+    parser, args = parse(
+        str(tmp_path), "lab.example.com:8000", "--scheme", "http", "--https-override", "true",
+    )
+    settings = build_settings(args, parser, "plain")
+    assert settings.server == "http://lab.example.com:8000"
 
 
 def test_patterns_excludes_and_scheme(tmp_path):
@@ -115,15 +129,15 @@ def test_main_with_no_args_launches_the_gui(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_run_gui(settings, email="", version="", scheme="http"):
+    def fake_run_gui(settings, email="", version="", scheme="https", https_override=False):
         seen.update(settings=settings, email=email, scheme=scheme)
         return 0
 
     monkeypatch.setattr("labnexus_pyprobe.gui.run_gui", fake_run_gui)
     assert cli.main([]) == 0
     assert seen["settings"].queues[0].directory == tmp_path
-    assert seen["settings"].server == "http://env.example:9000"
-    assert seen["scheme"] == "http"
+    assert seen["settings"].server == "https://env.example:9000"
+    assert seen["scheme"] == "https"
 
 
 def test_gui_starts_with_blank_server_and_cwd(monkeypatch, tmp_path):

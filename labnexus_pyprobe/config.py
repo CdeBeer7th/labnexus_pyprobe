@@ -30,12 +30,27 @@ def _same_file(left: Path, right: Path) -> bool:
         return left == right
 
 
-def normalise_server(server: str, scheme: str = "http") -> str:
-    """Turn ``host:port`` (or a full URL) into a base URL without a trailing slash."""
+class HttpDisabledError(ValueError):
+    """Raised by :func:`normalise_server` when a server would resolve to plain
+    HTTP but the caller has not explicitly allowed it."""
+
+
+def normalise_server(server: str, scheme: str = "https", *, allow_http: bool = False) -> str:
+    """Turn ``host:port`` (or a full URL) into a base URL without a trailing slash.
+
+    Plain HTTP is refused unless *allow_http* is set - credentials and upload
+    data should not travel unencrypted by default.
+    """
     server = server.strip()
     if "://" not in server:
         server = f"{scheme}://{server}"
-    return server.rstrip("/")
+    server = server.rstrip("/")
+    if server.startswith("http://") and not allow_http:
+        raise HttpDisabledError(
+            f"refusing to use plain http for {server!r}; use an https:// server "
+            "or pass --https-override true to allow it"
+        )
+    return server
 
 
 @dataclass

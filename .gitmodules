@@ -1,0 +1,4 @@
+[submodule "vendor/labnexus_plate_parsers"]
+	path = vendor/labnexus_plate_parsers
+	url = https://github.com/CdeBeer7th/labnexus_plate_parsers.git
+	branch = main

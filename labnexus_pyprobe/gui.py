@@ -16,7 +16,7 @@ from tkinter import filedialog, ttk
 from labnexus_plate_parsers import SpectrometerModel, resolve_model
 
 from .client import AuthError, LabNexusClient, UploadError
-from .config import DEFAULT_EXCLUDES, Queue, Settings, normalise_server
+from .config import DEFAULT_EXCLUDES, HttpDisabledError, Queue, Settings, normalise_server
 from .formatting import human_size
 from .notify import Notifier
 from .watcher import ProbeEvent, Watcher
@@ -56,12 +56,14 @@ class ProbeWindow(tk.Tk):
         settings: Settings,
         email: str = "",
         version: str = "",
-        scheme: str = "http",
+        scheme: str = "https",
+        https_override: bool = False,
     ) -> None:
         super().__init__()
         self.settings = settings
         self.version = version
         self.scheme = scheme
+        self.https_override = https_override
         self.events: queue.Queue[ProbeEvent] = queue.Queue()
         self.watcher: Watcher | None = None
         self.worker: threading.Thread | None = None
@@ -428,9 +430,17 @@ class ProbeWindow(tk.Tk):
             self._set_status("Choose a workspace to file parsed runs under.", ERR)
             return None
 
+        try:
+            server = normalise_server(
+                self.var_server.get(), self.scheme, allow_http=self.https_override
+            )
+        except HttpDisabledError as exc:
+            self._set_status(str(exc), ERR)
+            return None
+
         return replace(
             self.settings,
-            server=normalise_server(self.var_server.get(), self.scheme),
+            server=server,
             queues=queues,
             workspace_id=workspace,
             interval=interval,
@@ -609,11 +619,17 @@ class ProbeWindow(tk.Tk):
 
 
 def run_gui(
-    settings: Settings, email: str = "", version: str = "", scheme: str = "http"
+    settings: Settings,
+    email: str = "",
+    version: str = "",
+    scheme: str = "https",
+    https_override: bool = False,
 ) -> int:
     """Entry point for ``--gui``. Returns a process exit code."""
     try:
-        window = ProbeWindow(settings, email=email, version=version, scheme=scheme)
+        window = ProbeWindow(
+            settings, email=email, version=version, scheme=scheme, https_override=https_override
+        )
     except tk.TclError as exc:
         print(f"Could not open a window ({exc}). Run without --gui for the terminal UI.")
         return 1

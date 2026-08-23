@@ -14,7 +14,7 @@ from pathlib import Path
 from labnexus_plate_parsers import UnifiedPlateReaderOutput, UnsupportedFileType
 from labnexus_plate_parsers import parse as parse_plate_reader
 
-from .client import AuthError, LabNexusClient, UploadError
+from .client import AuthError, CaptchaRequired, LabNexusClient, UploadError
 from .config import Queue, Settings
 
 EventKind = str  # one of: info, scan, found, parsed, uploaded, failed, skipped, error
@@ -163,6 +163,14 @@ class Watcher:
         while not self._stop.is_set():
             try:
                 self.scan_once()
+            except CaptchaRequired as exc:
+                self.emit("info", f"{exc} Solving it automatically...")
+                try:
+                    self.client.reverify()
+                except AuthError as reverify_exc:
+                    self.emit("error", str(reverify_exc))
+                    break
+                self.emit("info", "CAPTCHA re-verified; resuming on the next scan.")
             except AuthError as exc:
                 self.emit("error", str(exc))
                 break

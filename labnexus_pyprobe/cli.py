@@ -11,7 +11,7 @@ from pathlib import Path
 
 from labnexus_plate_parsers import SpectrometerModel, UnknownModel, patterns_for, resolve_model
 
-from .config import DEFAULT_EXCLUDES, Queue, Settings, normalise_server
+from .config import DEFAULT_EXCLUDES, HttpDisabledError, Queue, Settings, normalise_server
 
 PROG = "labnexus-pyprobe"
 
@@ -24,6 +24,10 @@ environment variables:
   LABNEXUS_TOKEN       existing access token, skips the login step
   LABNEXUS_WORKSPACE   default for --workspace
   LABNEXUS_SPECTROMETER  default for --spectrometer
+
+note:
+  plain http is refused by default; pass --https-override true to allow an
+  http:// server (or one where --scheme resolves to http)
 
 examples:
   # no arguments: open the desktop window and pick the folder and server there
@@ -57,6 +61,15 @@ examples:
   LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \\
       -e me@lab.org --plain --log-file ~/pyprobe.log
 """
+
+
+def _parse_bool(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered in ("true", "1", "yes", "on"):
+        return True
+    if lowered in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected true or false, got {value!r}")
 
 
 def get_version() -> str:
@@ -94,8 +107,15 @@ def build_parser() -> argparse.ArgumentParser:
     conn.add_argument(
         "--scheme",
         choices=("http", "https"),
-        default="http",
+        default="https",
         help="scheme to assume when SERVER has none (default: %(default)s)",
+    )
+    conn.add_argument(
+        "--https-override",
+        type=_parse_bool,
+        default=False,
+        metavar="{true,false}",
+        help="allow a plain http:// server instead of https (default: false)",
     )
     conn.add_argument("-e", "--email", metavar="ADDR", help="LabNexus account email")
     conn.add_argument("--token", metavar="JWT", help="use an existing access token, skip login")
@@ -357,8 +377,18 @@ def build_settings(args: argparse.Namespace, parser: argparse.ArgumentParser, ui
             "LABNEXUS_WORKSPACE; --list-workspaces shows the ones you can use)"
         )
 
+    try:
+        server = (
+            normalise_server(raw_server, args.scheme, allow_http=args.https_override)
+            if raw_server
+            else ""
+        )
+    except HttpDisabledError as exc:
+        parser.error(str(exc))
+        raise  # unreachable; parser.error exits
+
     settings = Settings(
-        server=normalise_server(raw_server, args.scheme) if raw_server else "",
+        server=server,
         queues=queues,
         workspace_id=workspace,
         interval=max(1.0, args.interval),
@@ -422,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
             email=email or "",
             version=get_version(),
             scheme=args.scheme,
+            https_override=args.https_override,
         )
 
     from .client import AuthError, LabNexusClient

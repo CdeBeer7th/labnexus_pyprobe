@@ -8,7 +8,7 @@ from labnexus_pyprobe.watcher import Watcher
 def make(server, tmp_path, **kwargs):
     settings = Settings.single(
         tmp_path,
-        normalise_server(server),
+        normalise_server(server, "http", allow_http=True),
         min_age=0,
         state_file=tmp_path / "state.json",
         **kwargs,
@@ -20,7 +20,7 @@ def make(server, tmp_path, **kwargs):
 
 
 def test_login_rejects_bad_credentials(server):
-    client = LabNexusClient(normalise_server(server))
+    client = LabNexusClient(normalise_server(server, "http", allow_http=True))
     with pytest.raises(AuthError):
         client.login("me@lab.org", "wrong")
 

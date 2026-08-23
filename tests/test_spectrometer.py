@@ -15,7 +15,7 @@ from labnexus_pyprobe.watcher import Watcher
 
 def make(server, tmp_path, queues, **kwargs):
     settings = Settings(
-        server=normalise_server(server),
+        server=normalise_server(server, "http", allow_http=True),
         queues=queues,
         workspace_id=kwargs.pop("workspace_id", WORKSPACE_ID),
         min_age=0,
@@ -203,7 +203,7 @@ class TestMixedQueues:
 
 class TestClient:
     def test_lists_workspaces(self, server):
-        client = LabNexusClient(normalise_server(server))
+        client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         client.login("me@lab.org", "hunter2")
         spaces = client.workspaces()
 
@@ -212,12 +212,12 @@ class TestClient:
         assert spaces[0].owned and not spaces[1].owned
 
     def test_reads_the_servers_model_list(self, server):
-        client = LabNexusClient(normalise_server(server))
+        client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         client.login("me@lab.org", "hunter2")
         assert client.server_models()["parser_version"] == "0.1.0"
 
     def test_refuses_to_upload_without_a_workspace(self, server, tmp_path, spark_export):
-        client = LabNexusClient(normalise_server(server))
+        client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         client.login("me@lab.org", "hunter2")
         target = tmp_path / "run.xlsx"
         target.write_bytes(spark_export.read_bytes())
@@ -228,7 +228,7 @@ class TestClient:
     def test_returns_the_servers_response(self, server, tmp_path, spark_export):
         from labnexus_plate_parsers import parse as parse_plate_reader
 
-        client = LabNexusClient(normalise_server(server))
+        client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         client.login("me@lab.org", "hunter2")
         target = tmp_path / "run.xlsx"
         target.write_bytes(spark_export.read_bytes())
@@ -241,7 +241,7 @@ class TestClient:
         assert result["data"]["schema_version"] == "2.0.0"
 
     def test_api_calls_are_prefixed(self, server):
-        client = LabNexusClient(normalise_server(server))
+        client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         assert client._api("/workspaces/").endswith("/api/workspaces/")
 
 

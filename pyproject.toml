@@ -44,10 +44,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["labnexus_pyprobe"]
 
-# Local sibling checkout. Switch to a published source (git tag or PyPI) before
-# building a release wheel - a path source does not survive packaging.
 [tool.uv.sources]
-labnexus-plate-parsers = { path = "../labnexus_plate_parsers", editable = true }
+# The `vendor/labnexus_plate_parsers` git submodule - the same commit the server
+# pins, so bench-side and server-side parsing cannot drift. The repo is private,
+# so a `git = ...` source would need credentials on every checkout.
+# Bump it with `git submodule update --remote vendor/labnexus_plate_parsers`.
+labnexus-plate-parsers = { path = "vendor/labnexus_plate_parsers" }
 
 [dependency-groups]
 dev = [

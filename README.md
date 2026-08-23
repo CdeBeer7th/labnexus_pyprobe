@@ -224,5 +224,20 @@ can't drift between them.
 Parsers are **not** in this repo. They live in
 [labnexus-plate-parsers](https://github.com/CdeBeer7th/labnexus_plate_parsers), which both
 pyProbe and the LabNexus server depend on, so the two cannot disagree about what a file
-means. `uv sync` picks it up from the sibling checkout configured in
-`[tool.uv.sources]`; clone it next to this repo.
+means. It is vendored here as the **git submodule** `vendor/labnexus_plate_parsers`, at
+the same path and pinned to the same commit as in the server repo — the submodule pointer
+is what keeps bench-side and server-side parsing identical.
+
+```bash
+git clone --recurse-submodules https://github.com/CdeBeer7th/labnexus_pyprobe.git
+git submodule update --init vendor/labnexus_plate_parsers   # existing clone
+git submodule update --remote vendor/labnexus_plate_parsers # pull latest main
+```
+
+`uv sync` builds it straight from that directory, so edits to a parser are picked up by
+the next `uv sync` with no reinstall dance. Publishing a parser change is two commits here
+(one inside `vendor/labnexus_plate_parsers`, pushed; one recording the new pointer plus
+`uv lock`) and the matching pointer bump in the server repo.
+
+`uv sync` therefore **requires the submodule** — without it uv reports
+`Distribution not found at: file:///.../vendor/labnexus_plate_parsers`.

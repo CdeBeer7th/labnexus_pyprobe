@@ -12,6 +12,8 @@ from typing import Any
 import requests
 from labnexus_plate_parsers import SpectrometerModel, UnifiedPlateReaderOutput
 
+from .captcha import solve_pow_challenge
+
 #: The server mounts its REST and spectrometer routes under /api, but auth sits
 #: at the root, so the two cannot share one base.
 API_PREFIX = "/api"
@@ -78,10 +80,15 @@ class LabNexusClient:
 
     def login(self, email: str, password: str) -> str:
         """Exchange credentials for a JWT and remember it for later uploads."""
+        data = {"username": email, "password": password}
+        cap_token = self.solve_captcha()
+        if cap_token:
+            data["cap_token"] = cap_token
+
         try:
             response = self.session.post(
                 f"{self.base_url}/auth/jwt/login",
-                data={"username": email, "password": password},
+                data=data,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
@@ -105,6 +112,111 @@ class LabNexusClient:
         self.token = token
         self.session.headers["Authorization"] = f"Bearer {token}"
 
+    # -- CAPTCHA -----------------------------------------------------------
+
+    def _captcha_config(self) -> dict | None:
+        """The server's public CAPTCHA config, or None if it has none enabled."""
+        try:
+            response = self.session.get(f"{self.base_url}/captcha/config", timeout=self.timeout)
+        except requests.RequestException:
+            return None
+        if not response.ok:
+            return None
+        try:
+            config = response.json()
+        except ValueError:
+            return None
+        if not config.get("enabled") or not config.get("site_key"):
+            return None
+        return config
+
+    def solve_captcha(self) -> str | None:
+        """Solve a Cap.js proof-of-work challenge and redeem it for a cap_token.
+
+        Returns None when the server has no CAPTCHA configured - the common
+        case, and the only one that must not raise, since callers use this
+        before every login. Raises CaptchaRequired if the server demands a
+        challenge this client cannot solve headlessly (a time-lock puzzle, or
+        browser instrumentation) - those need a real browser, so the user has
+        to sign in to the web UI once instead.
+        """
+        config = self._captcha_config()
+        if config is None:
+            return None
+
+        cap_url = f"{self.base_url}/cap/{config['site_key']}"
+        try:
+            response = self.session.post(f"{cap_url}/challenge", json={}, timeout=self.timeout)
+        except requests.RequestException as exc:
+            raise CaptchaRequired(f"Could not reach the CAPTCHA server: {exc}") from exc
+        if not response.ok:
+            raise CaptchaRequired(
+                f"The CAPTCHA server rejected the challenge request (HTTP {response.status_code})."
+            )
+        try:
+            challenge = response.json()
+        except ValueError as exc:
+            raise CaptchaRequired("The CAPTCHA server returned an unreadable challenge.") from exc
+
+        # format 2 (time-lock puzzles) and instrumentation both need a real
+        # browser to solve - this client only speaks plain proof-of-work.
+        if challenge.get("format") == 2 or "challenge" not in challenge:
+            raise CaptchaRequired(
+                "This server's CAPTCHA needs a real browser to solve. Sign in "
+                "to the LabNexus web interface once, then restart pyProbe."
+            )
+
+        params = challenge["challenge"]
+        solutions = solve_pow_challenge(challenge["token"], params["c"], params["s"], params["d"])
+
+        try:
+            redeemed = self.session.post(
+                f"{cap_url}/redeem",
+                json={"token": challenge["token"], "solutions": solutions},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise CaptchaRequired(f"Could not redeem the CAPTCHA challenge: {exc}") from exc
+        if not redeemed.ok:
+            raise CaptchaRequired(
+                f"The CAPTCHA server rejected the solved challenge (HTTP {redeemed.status_code})."
+            )
+        try:
+            result = redeemed.json()
+        except ValueError as exc:
+            raise CaptchaRequired(
+                "The CAPTCHA server returned an unreadable redemption result."
+            ) from exc
+
+        if not result.get("success") or not result.get("token"):
+            raise CaptchaRequired("The CAPTCHA server did not accept the solved challenge.")
+        return result["token"]
+
+    def reverify(self) -> None:
+        """Solve a fresh CAPTCHA and clear a pending re-verification flag.
+
+        Called after ``_raise_for_auth`` raises CaptchaRequired mid-session
+        (an IP region change or rate limit tripped the server's re-check) -
+        on success, the request that triggered it can simply be retried.
+        """
+        if not self.logged_in:
+            raise AuthError("No active session - log in before re-verifying.")
+        cap_token = self.solve_captcha()
+        if cap_token is None:
+            raise CaptchaRequired(
+                "The server wants CAPTCHA re-verification but has none configured."
+            )
+        try:
+            response = self.session.post(
+                f"{self.base_url}/captcha/reverify",
+                json={"cap_token": cap_token},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise CaptchaRequired(f"Could not reach the CAPTCHA server: {exc}") from exc
+        if not response.ok:
+            raise CaptchaRequired(f"CAPTCHA re-verification failed (HTTP {response.status_code}).")
+
     def ping(self) -> bool:
         """Best-effort reachability check; never raises."""
         try:
@@ -119,8 +231,7 @@ class LabNexusClient:
             return
         if "CAPTCHA_REVERIFICATION_REQUIRED" in response.text:
             raise CaptchaRequired(
-                "The server needs a CAPTCHA solved before it will accept more uploads. "
-                "Sign in to the LabNexus web interface once, then restart pyProbe."
+                "The server needs a CAPTCHA re-verified before it will accept more uploads."
             )
         raise AuthError("Session expired or not permitted to upload.")
 

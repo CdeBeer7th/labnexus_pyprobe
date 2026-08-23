@@ -3,20 +3,34 @@ from pathlib import Path
 import pytest
 from labnexus_plate_parsers import SpectrometerModel
 
-from labnexus_pyprobe.config import Queue, Settings, normalise_server
+from labnexus_pyprobe.config import HttpDisabledError, Queue, Settings, normalise_server
 
 
 @pytest.mark.parametrize(
     ("raw", "scheme", "expected"),
     [
-        ("lab.example.com:8000", "http", "http://lab.example.com:8000"),
         ("lab.example.com", "https", "https://lab.example.com"),
         ("https://lab.example.com/", "http", "https://lab.example.com"),
-        ("  lab.example.com  ", "http", "http://lab.example.com"),
+        ("  lab.example.com  ", "https", "https://lab.example.com"),
     ],
 )
 def test_normalise_server(raw, scheme, expected):
     assert normalise_server(raw, scheme) == expected
+
+
+def test_normalise_server_refuses_plain_http_by_default():
+    with pytest.raises(HttpDisabledError):
+        normalise_server("lab.example.com:8000", "http")
+    with pytest.raises(HttpDisabledError):
+        normalise_server("http://lab.example.com")
+
+
+def test_normalise_server_allows_http_with_override():
+    assert (
+        normalise_server("lab.example.com:8000", "http", allow_http=True)
+        == "http://lab.example.com:8000"
+    )
+    assert normalise_server("http://x", allow_http=True) == "http://x"
 
 
 def test_patterns_and_excludes(tmp_path: Path):
