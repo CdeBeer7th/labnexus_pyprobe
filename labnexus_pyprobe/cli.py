@@ -21,9 +21,17 @@ environment variables:
   LABNEXUS_DIR         default for --directory
   LABNEXUS_EMAIL       default for --email
   LABNEXUS_PASSWORD    password to use instead of prompting
-  LABNEXUS_TOKEN       existing access token, skips the login step
+  LABNEXUS_PYPROBE_TOKEN  pyProbe access token, skips the login step
+  LABNEXUS_TOKEN       existing session JWT, skips the login step
   LABNEXUS_WORKSPACE   default for --workspace
   LABNEXUS_SPECTROMETER  default for --spectrometer
+
+authentication:
+  a pyProbe access token is the intended way to run unattended. Mint one in
+  the web interface under Settings -> pyProbe, then pass it with --email and
+  --pyprobe-token (or the matching environment variables). Unlike a password
+  it needs no CAPTCHA and no second factor, it expires on a date you choose,
+  and you can revoke it from the same page without touching your account.
 
 note:
   plain http is refused by default; pass --https-override true to allow an
@@ -56,6 +64,10 @@ examples:
 
   # which instruments are supported, and what each one exports
   labnexus-pyprobe --list-models
+
+  # unattended with a pyProbe token; parsed runs land in the Pyprobe workspace
+  LABNEXUS_PYPROBE_TOKEN=lnxp_... labnexus-pyprobe ~/readers/spark \\
+      lab.example.com -e me@lab.org -m tecan-spark --plain
 
   # unattended, logging to a file, credentials from the environment
   LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \\
@@ -118,7 +130,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow a plain http:// server instead of https (default: false)",
     )
     conn.add_argument("-e", "--email", metavar="ADDR", help="LabNexus account email")
-    conn.add_argument("--token", metavar="JWT", help="use an existing access token, skip login")
+    conn.add_argument(
+        "--pyprobe-token",
+        metavar="TOKEN",
+        help=(
+            "pyProbe access token (lnxp_...) minted under Settings -> pyProbe; "
+            "used with --email instead of a password"
+        ),
+    )
+    conn.add_argument("--token", metavar="JWT", help="use an existing session JWT, skip login")
     conn.add_argument(
         "--password-stdin",
         action="store_true",
@@ -143,7 +163,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-w",
         "--workspace",
         metavar="ID",
-        help="workspace to file uploads under (required for spectrometer queues)",
+        help=(
+            "workspace to file uploads under; omit it and the server uses this "
+            "account's Pyprobe workspace, creating it on first use"
+        ),
     )
     conn.add_argument(
         "--list-workspaces",
@@ -367,15 +390,10 @@ def build_settings(args: argparse.Namespace, parser: argparse.ArgumentParser, ui
         parser.error("no server given (pass SERVER, --server or set LABNEXUS_SERVER)")
 
     queues = build_queues(args, parser, ui)
+    # No longer required for spectrometer queues: the server files a run with
+    # no workspace under the account's Pyprobe workspace, which is the right
+    # default for a bench nobody is sitting at.
     workspace = args.workspace or os.environ.get("LABNEXUS_WORKSPACE")
-
-    # A parsed run is filed against a workspace; without one the server has
-    # nowhere to put it, and failing here beats failing on every upload.
-    if ui != "gui" and not workspace and any(q.model for q in queues):
-        parser.error(
-            "spectrometer queues need a workspace (pass --workspace or set "
-            "LABNEXUS_WORKSPACE; --list-workspaces shows the ones you can use)"
-        )
 
     try:
         server = (
@@ -442,7 +460,15 @@ def main(argv: list[str] | None = None) -> int:
     settings = build_settings(args, parser, ui)
     email = args.email or os.environ.get("LABNEXUS_EMAIL")
     token = args.token or os.environ.get("LABNEXUS_TOKEN")
+    pyprobe_token = args.pyprobe_token or os.environ.get("LABNEXUS_PYPROBE_TOKEN")
     password = read_password(args)
+
+    # A pyProbe token identifies the account only in combination with its
+    # owner's email, so refuse early rather than at the first upload.
+    if pyprobe_token and not email:
+        parser.error(
+            "--pyprobe-token needs the account email too (pass --email or set LABNEXUS_EMAIL)"
+        )
 
     if ui == "gui":
         from .gui import run_gui
@@ -450,6 +476,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_gui(
             settings,
             email=email or "",
+            pyprobe_token=pyprobe_token or "",
             version=get_version(),
             scheme=args.scheme,
             https_override=args.https_override,
@@ -466,10 +493,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.list_workspaces:
-            return print_workspaces(client, email, token, password)
+            return print_workspaces(client, email, token, password, pyprobe_token)
         if ui == "tui":
-            return run_tui(settings, client, email, token, password, args)
-        return run_plain(settings, client, email, token, password, args)
+            return run_tui(settings, client, email, token, password, args, pyprobe_token)
+        return run_plain(settings, client, email, token, password, args, pyprobe_token)
     except AuthError as exc:
         print(f"{PROG}: {exc}", file=sys.stderr)
         return 2
@@ -479,22 +506,30 @@ def main(argv: list[str] | None = None) -> int:
         client.close()
 
 
-def _authenticate(client, email, token, password, login_prompt) -> str:
-    """Use a token or non-interactive credentials if we have them, else prompt."""
+def _authenticate(client, email, token, password, login_prompt, pyprobe_token=None) -> str:
+    """Pick the least interactive credential available, prompting as a last resort.
+
+    Order matters: a pyProbe token is the one credential meant for unattended
+    use, so it wins over a password that would otherwise drag a CAPTCHA and a
+    second factor into a headless run. A raw session JWT still comes first —
+    someone who passed one has already done the exchange themselves.
+    """
     if token:
         client.use_token(token)
         return email or "token"
+    if pyprobe_token and email:
+        return client.authenticate_pyprobe(email, pyprobe_token)
     if email and password:
         client.login(email, password)
         return email
     return login_prompt(email)
 
 
-def print_workspaces(client, email, token, password) -> int:
+def print_workspaces(client, email, token, password, pyprobe_token=None) -> int:
     """List the workspaces this account can upload into, with their ids."""
     from .plain import prompt_login
 
-    _authenticate(client, email, token, password, lambda e: prompt_login(client, e))
+    _authenticate(client, email, token, password, lambda e: prompt_login(client, e), pyprobe_token)
     spaces = client.workspaces()
     if not spaces:
         print("No workspaces available for this account.")
@@ -508,17 +543,28 @@ def print_workspaces(client, email, token, password) -> int:
     return 0
 
 
-def run_tui(settings, client, email, token, password, args) -> int:
+def run_tui(settings, client, email, token, password, args, pyprobe_token=None) -> int:
     from rich.console import Console
 
-    from .tui import Dashboard, banner, prompt_login
+    from .tui import MUTED, Dashboard, banner, prompt_login
     from .watcher import Watcher
 
     console = Console()
     banner(console, get_version())
     who = _authenticate(
-        client, email, token, password, lambda e: prompt_login(console, client, e)
+        client,
+        email,
+        token,
+        password,
+        lambda e: prompt_login(console, client, e),
+        pyprobe_token,
     )
+
+    if not settings.workspace_id and client.default_workspace_name:
+        console.print(
+            f"  [{MUTED}]Parsed runs will be filed under "
+            f"[bold]{client.default_workspace_name}[/].[/]\n"
+        )
 
     if args.check:
         console.print(f"[green]OK[/] {settings.server} reachable and credentials accepted.")
@@ -531,13 +577,20 @@ def run_tui(settings, client, email, token, password, args) -> int:
     return 1 if watcher.stats.failed else 0
 
 
-def run_plain(settings, client, email, token, password, args) -> int:
+def run_plain(settings, client, email, token, password, args, pyprobe_token=None) -> int:
+    import logging
+
     from .notify import Notifier
     from .plain import prompt_login, report, run, setup_logging
     from .watcher import ProbeEvent, Watcher
 
     setup_logging(args.verbose, args.quiet, args.log_file)
-    _authenticate(client, email, token, password, lambda e: prompt_login(client, e))
+    _authenticate(client, email, token, password, lambda e: prompt_login(client, e), pyprobe_token)
+
+    if not settings.workspace_id and client.default_workspace_name:
+        logging.getLogger("pyprobe").info(
+            "Parsed runs will be filed under %s.", client.default_workspace_name
+        )
 
     if args.check:
         print(f"OK: {settings.server} reachable and credentials accepted.")

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from conftest import WORKSPACE_ID
 from labnexus_plate_parsers import SpectrometerModel, UnifiedPlateReaderOutput
 
-from labnexus_pyprobe.client import LabNexusClient, UploadError
+from labnexus_pyprobe.client import LabNexusClient
 from labnexus_pyprobe.config import Queue, Settings, normalise_server
 from labnexus_pyprobe.watcher import Watcher
 
@@ -216,14 +215,24 @@ class TestClient:
         client.login("me@lab.org", "hunter2")
         assert client.server_models()["parser_version"] == "0.1.0"
 
-    def test_refuses_to_upload_without_a_workspace(self, server, tmp_path, spark_export):
+    def test_omits_the_workspace_when_none_was_chosen(
+        self, server, tmp_path, spark_export, spectrometer_uploads
+    ):
+        """No workspace means no query parameter, so the server can default.
+
+        Sending ``workspace_id=`` would ask the server to file the run under
+        the empty string; leaving it out is what triggers its Pyprobe fallback.
+        """
         client = LabNexusClient(normalise_server(server, "http", allow_http=True))
         client.login("me@lab.org", "hunter2")
         target = tmp_path / "run.xlsx"
         target.write_bytes(spark_export.read_bytes())
 
-        with pytest.raises(UploadError, match="no workspace"):
-            client.upload_spectrometer(target, SpectrometerModel.tecanSpark, "")
+        client.upload_spectrometer(target, SpectrometerModel.tecanSpark)
+
+        query = spectrometer_uploads[0]["query"]
+        assert "workspace_id" not in query
+        assert "prober=true" in query
 
     def test_returns_the_servers_response(self, server, tmp_path, spark_export):
         from labnexus_plate_parsers import parse as parse_plate_reader

@@ -129,8 +129,10 @@ def test_main_with_no_args_launches_the_gui(monkeypatch, tmp_path):
 
     seen = {}
 
-    def fake_run_gui(settings, email="", version="", scheme="https", https_override=False):
-        seen.update(settings=settings, email=email, scheme=scheme)
+    def fake_run_gui(
+        settings, email="", pyprobe_token="", version="", scheme="https", https_override=False
+    ):
+        seen.update(settings=settings, email=email, scheme=scheme, pyprobe_token=pyprobe_token)
         return 0
 
     monkeypatch.setattr("labnexus_pyprobe.gui.run_gui", fake_run_gui)
@@ -203,10 +205,10 @@ class TestSpectrometerQueues:
         with pytest.raises(SystemExit):
             build_settings(args, parser, "plain")
 
-    def test_a_spectrometer_queue_without_a_workspace_is_an_error(self, tmp_path):
+    def test_a_spectrometer_queue_needs_no_workspace(self, tmp_path):
+        """The server files a workspace-less run under Pyprobe, so this is fine."""
         parser, args = parse("-s", "lab.example", "-Q", f"{tmp_path}=tecanSpark")
-        with pytest.raises(SystemExit):
-            build_settings(args, parser, "plain")
+        assert build_settings(args, parser, "plain").workspace_id is None
 
     def test_a_plain_queue_needs_no_workspace(self, tmp_path):
         parser, args = parse("-s", "lab.example", "-Q", str(tmp_path))
@@ -233,3 +235,84 @@ class TestSpectrometerQueues:
         assert cli.main(["--list-models"]) == 0
         out = capsys.readouterr().out
         assert "Tecan Spark" in out and "*.xlsx" in out
+
+
+class TestPyProbeToken:
+    """Credential selection for the unattended path."""
+
+    def test_flag_is_parsed(self, tmp_path):
+        _, args = parse(str(tmp_path), "lab.example", "--pyprobe-token", "lnxp_abc")
+        assert args.pyprobe_token == "lnxp_abc"
+
+    def test_a_token_without_an_email_is_an_error(self, tmp_path, monkeypatch):
+        """The token names no account on its own, so fail before the first upload."""
+        monkeypatch.delenv("LABNEXUS_EMAIL", raising=False)
+        monkeypatch.setattr(cli, "resolve_ui", lambda *a, **k: "plain")
+        with pytest.raises(SystemExit):
+            cli.main([str(tmp_path), "lab.example", "--pyprobe-token", "lnxp_abc"])
+
+    def test_authenticate_prefers_the_token_over_a_password(self):
+        """A password login drags in a CAPTCHA, which a bench cannot solve."""
+        calls = []
+
+        class FakeClient:
+            def use_token(self, token):
+                calls.append(("use_token", token))
+
+            def authenticate_pyprobe(self, email, token):
+                calls.append(("pyprobe", email, token))
+                return email
+
+            def login(self, email, password):
+                calls.append(("login", email, password))
+
+        def never(_email):
+            raise AssertionError("should not have prompted")
+
+        who = cli._authenticate(
+            FakeClient(), "me@lab.org", None, "hunter2", never, "lnxp_abc"
+        )
+
+        assert who == "me@lab.org"
+        assert calls == [("pyprobe", "me@lab.org", "lnxp_abc")]
+
+    def test_an_explicit_session_jwt_still_wins(self):
+        """Someone who passed --token has already done the exchange themselves."""
+        calls = []
+
+        class FakeClient:
+            def use_token(self, token):
+                calls.append(("use_token", token))
+
+            def authenticate_pyprobe(self, email, token):
+                calls.append(("pyprobe", email, token))
+                return email
+
+        cli._authenticate(FakeClient(), "me@lab.org", "jwt-123", None, None, "lnxp_abc")
+
+        assert calls == [("use_token", "jwt-123")]
+
+    def test_falls_back_to_a_password_without_a_token(self):
+        calls = []
+
+        class FakeClient:
+            def login(self, email, password):
+                calls.append(("login", email, password))
+
+        cli._authenticate(FakeClient(), "me@lab.org", None, "hunter2", None, None)
+
+        assert calls == [("login", "me@lab.org", "hunter2")]
+
+    def test_token_falls_back_to_the_environment(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LABNEXUS_PYPROBE_TOKEN", "lnxp_from-env")
+        monkeypatch.setenv("LABNEXUS_EMAIL", "me@lab.org")
+        seen = {}
+
+        def fake_run_plain(settings, client, email, token, password, args, pyprobe_token=None):
+            seen.update(email=email, pyprobe_token=pyprobe_token)
+            return 0
+
+        monkeypatch.setattr(cli, "resolve_ui", lambda *a, **k: "plain")
+        monkeypatch.setattr(cli, "run_plain", fake_run_plain)
+        assert cli.main([str(tmp_path), "lab.example"]) == 0
+        assert seen == {"email": "me@lab.org", "pyprobe_token": "lnxp_from-env"}

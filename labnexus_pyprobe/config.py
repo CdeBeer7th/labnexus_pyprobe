@@ -122,8 +122,9 @@ class Settings:
 
     server: str
     queues: list[Queue] = field(default_factory=list)
-    #: Workspace every queue uploads into. Required for spectrometer queues,
-    #: since that is what the server files the parsed run under.
+    #: Workspace every queue uploads into. Optional: left unset, the server
+    #: files parsed runs under the account's "Pyprobe" workspace, creating it
+    #: on first use. Set it to send a bench's output somewhere specific.
     workspace_id: str | None = None
     interval: float = 5.0
     only_new: bool = False

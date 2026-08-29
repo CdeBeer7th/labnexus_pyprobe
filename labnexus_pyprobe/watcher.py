@@ -243,10 +243,13 @@ class Watcher:
         self.emit("found", f"Uploading {path.name}", path=path, size=stat.st_size, queue=queue)
         try:
             if queue.model is not None:
+                # None (not "") when unset: the client omits the query
+                # parameter entirely so the server falls back to the
+                # account's Pyprobe workspace.
                 self.client.upload_spectrometer(
                     path,
                     queue.model,
-                    self.settings.workspace_id or "",
+                    self.settings.workspace_id or None,
                     structured=structured,
                 )
             else:

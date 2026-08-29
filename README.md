@@ -65,6 +65,9 @@ labnexus-pyprobe ~/data lab.example.com:8000
 pyProbe asks for your LabNexus email and password, opens a session, and starts watching.
 Press `ctrl-c` to stop. Files already uploaded are remembered across restarts.
 
+For a bench nobody is sitting at, use a **pyProbe access token** instead of a password —
+see [Signing in unattended](#signing-in-unattended) below.
+
 A few common variations:
 
 ```bash
@@ -77,13 +80,49 @@ labnexus-pyprobe --gui -d ~/data -s lab.example.com:8000
 # see what would be uploaded, send nothing
 labnexus-pyprobe ~/data lab.example.com --dry-run
 
-# unattended: no prompts, plain log output to a file
-LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \
+# unattended: a pyProbe token, no prompts, plain log output to a file
+LABNEXUS_PYPROBE_TOKEN=lnxp_... labnexus-pyprobe ~/data lab.example.com \
     -e me@lab.org --plain --log-file ~/pyprobe.log
 
 # check the server and your credentials, then exit
 labnexus-pyprobe ~/data lab.example.com --check
 ```
+
+### Signing in unattended
+
+A password login is the wrong shape for an instrument PC: the server may ask for a
+CAPTCHA or a second factor, and neither can be answered by a process running on its own
+overnight. A **pyProbe access token** is the credential built for that case.
+
+Mint one in the LabNexus web interface under **Settings → pyProbe**. Give it a name you
+will recognise (`Bench 3 — SpectraMax`) and an expiry, and copy the `lnxp_…` value — it
+is shown once and stored only as a hash, so a lost token is replaced rather than
+recovered. Then hand it to pyProbe together with the account email:
+
+```bash
+labnexus-pyprobe ~/readers/spark lab.example.com \
+    -e me@lab.org --pyprobe-token lnxp_... -m tecan-spark --plain
+
+# or, better for a service or a cron job — keep it out of the process list
+LABNEXUS_EMAIL=me@lab.org LABNEXUS_PYPROBE_TOKEN=lnxp_... \
+    labnexus-pyprobe ~/readers/spark lab.example.com -m tecan-spark --plain
+```
+
+Both halves are required: the token alone will not open a session, so a copy of it
+lifted from a config file is not usable without knowing whose it is.
+
+What this buys you over `--password-stdin` / `LABNEXUS_PASSWORD`:
+
+- **No CAPTCHA, no second factor.** The session pyProbe gets is marked as a bench
+  session, so the server does not re-challenge it on an IP change or an upload burst.
+- **It expires on a date you chose**, and the session it buys never outlives the token.
+- **It is revocable on its own.** Delete it from Settings → pyProbe and that bench stops
+  syncing; your password and every other install are untouched.
+- **It is not your password.** A token cannot change your email, your password, or
+  anything else about the account.
+
+`--token` is still there for a session JWT you obtained yourself; it skips the exchange
+entirely.
 
 ### Spectrometers
 
@@ -140,9 +179,11 @@ labnexus-pyprobe --list-workspaces -s lab.example.com -e me@lab.org
 Spelling is forgiving — `tecan-spark`, `tecanSpark`, `TECAN SPARK` and `Tecan Spark` all
 resolve to the same instrument.
 
-Spectrometer queues need a `--workspace`: that is what the server files the parsed run
-under. `--list-workspaces` prints the ids you can use. Folders given without an
-instrument keep working exactly as before — plain file upload, no workspace needed.
+`--workspace` is optional. Left out, the server files parsed runs under this account's
+**Pyprobe** workspace, creating it the first time one arrives — which is what you want on
+a bench where nobody is choosing a destination. Pass `--workspace` to send a particular
+reader's output somewhere specific; `--list-workspaces` prints the ids you can use.
+Folders given without an instrument are uploaded as plain files, as before.
 
 Run `labnexus-pyprobe --help` for the full list of options.
 
@@ -184,7 +225,8 @@ again. Pass `--no-reupload-changed` if you only ever want each filename sent onc
 | `LABNEXUS_DIR` | `--directory` |
 | `LABNEXUS_EMAIL` | `--email` |
 | `LABNEXUS_PASSWORD` | password, instead of prompting |
-| `LABNEXUS_TOKEN` | an existing access token — skips login entirely |
+| `LABNEXUS_PYPROBE_TOKEN` | `--pyprobe-token` — the unattended credential |
+| `LABNEXUS_TOKEN` | an existing session JWT — skips login entirely |
 | `LABNEXUS_WORKSPACE` | `--workspace` |
 | `LABNEXUS_SPECTROMETER` | `--spectrometer` |
 
@@ -210,7 +252,7 @@ uv run labnexus-pyprobe --help
 | --- | --- |
 | `cli.py` | Argument parsing, environment defaults, front-end selection |
 | `config.py` | `Queue` (a folder + its instrument) and `Settings`: what to watch |
-| `client.py` | LabNexus HTTP: login, workspaces, plain and structured uploads |
+| `client.py` | LabNexus HTTP: password and pyProbe-token sign-in, workspaces, plain and structured uploads |
 | `watcher.py` | The scan loop, parsing, change detection, history — emits `ProbeEvent`s |
 | `tui.py` | Rich terminal dashboard |
 | `gui.py` | Tkinter desktop window |
