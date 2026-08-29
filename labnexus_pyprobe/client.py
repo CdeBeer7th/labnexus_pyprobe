@@ -28,6 +28,51 @@ PYPROBE_AUTH_PATH = "/auth/pyprobe/token"
 PYPROBE_TOKEN_PREFIX = "lnxp_"  # noqa: S105 - a public prefix, not a secret
 
 
+def describe_unreachable(url: str, exc: Exception) -> str:
+    """Say why *url* could not be reached, in terms the user can act on.
+
+    requests hands back a nested urllib3 traceback whose most visible phrase is
+    "Max retries exceeded", which describes what the library did rather than
+    what went wrong. The cause is in there, so dig it out - and branch on the
+    exception type rather than on OpenSSL's wording, which differs between
+    builds ("wrong version number" on one, "record layer failure" on another)
+    for the same underlying mistake.
+    """
+    text = str(exc)
+
+    # SSLError before ConnectionError: requests makes the first a subclass of
+    # the second, so the order of these checks is what tells them apart.
+    if isinstance(exc, requests.exceptions.SSLError):
+        if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
+            return (
+                f"Could not reach {url}: its TLS certificate could not be "
+                "verified. Install a certificate this machine trusts, or accept "
+                "the risk with -k / --insecure."
+            )
+        # The handshake itself failed, so whatever is on that port is not
+        # speaking TLS - nearly always a plain http server addressed as https.
+        return (
+            f"Could not reach {url}: something is listening there, but it is not "
+            "speaking TLS. If that is a plain http server, address it as "
+            f"http://{url.split('://', 1)[-1]} - in the window, tick 'Plain "
+            "http'; on the command line, add --https-override true."
+        )
+
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"Could not reach {url}: it did not answer in time."
+
+    if "NameResolutionError" in text or "Failed to resolve" in text or "nodename nor" in text:
+        return f"Could not reach {url}: that hostname does not resolve. Check the address."
+
+    if "Connection refused" in text:
+        return (
+            f"Could not reach {url}: nothing is listening on that port. Check the "
+            "server is running, and that the port is the one it serves on."
+        )
+
+    return f"Could not reach {url}: {exc}"
+
+
 class AuthError(RuntimeError):
     """Raised when the server rejects the supplied credentials or token."""
 
@@ -106,7 +151,7 @@ class LabNexusClient:
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AuthError(f"Could not reach {self.base_url}: {exc}") from exc
+            raise AuthError(describe_unreachable(self.base_url, exc)) from exc
 
         if response.status_code in (400, 401, 403):
             raise AuthError("The server rejected that email/password combination.")
@@ -140,7 +185,7 @@ class LabNexusClient:
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AuthError(f"Could not reach {self.base_url}: {exc}") from exc
+            raise AuthError(describe_unreachable(self.base_url, exc)) from exc
 
         if response.status_code == 429:
             raise AuthError(

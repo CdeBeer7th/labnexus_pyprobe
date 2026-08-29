@@ -155,6 +155,11 @@ class ProbeWindow(tk.Tk):
         self.var_email = tk.StringVar(value=email)
         self.var_password = tk.StringVar()
         self.var_pyprobe_token = tk.StringVar(value=pyprobe_token)
+        #: Both allows an http:// address and makes http the scheme assumed for
+        #: a bare "host:port" - a server that speaks plain http wants both, and
+        #: asking the user for them separately would be a trap.
+        self.var_plain_http = tk.BooleanVar(value=self.https_override)
+        self.var_server_hint = tk.StringVar()
         self.var_interval = tk.StringVar(value=str(int(s.interval)))
         self.var_recursive = tk.BooleanVar(value=s.queues[0].recursive if s.queues else False)
         self.var_workspace = tk.StringVar(value=s.workspace_id or "")
@@ -168,8 +173,16 @@ class ProbeWindow(tk.Tk):
 
         # Changing any of these invalidates the session they bought, so the
         # window drops it rather than uploading with a stale one.
-        for var in (self.var_server, self.var_email, self.var_password, self.var_pyprobe_token):
+        for var in (
+            self.var_server,
+            self.var_email,
+            self.var_password,
+            self.var_pyprobe_token,
+            self.var_plain_http,
+        ):
             var.trace_add("write", self._on_credentials_changed)
+        self.var_plain_http.trace_add("write", self._refresh_server_hint)
+        self._refresh_server_hint()
 
     def _init_style(self) -> None:
         style = ttk.Style(self)
@@ -353,7 +366,18 @@ class ProbeWindow(tk.Tk):
         conn = self._card(wrap, "Connection")
         conn.columnconfigure(1, weight=1)
         self.entry_server = self._field(conn, "Server", self.var_server, 1)
-        self._hint(conn, f"host, host:port or a full URL ({self.scheme}:// is assumed)", 2)
+        server_row = ttk.Frame(conn, style="Card.TFrame")
+        server_row.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(0, 4))
+        server_row.columnconfigure(0, weight=1)
+        hint = ttk.Label(server_row, textvariable=self.var_server_hint, style="Hint.TLabel")
+        hint.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        # The checkbox takes its width out of this row, leaving the hint less
+        # than it wants; wrapping to the space it actually got beats clipping
+        # the sentence mid-word.
+        hint.bind("<Configure>", lambda event: hint.configure(wraplength=max(120, event.width)))
+        ttk.Checkbutton(server_row, text="Plain http", variable=self.var_plain_http).grid(
+            row=0, column=1, sticky="e"
+        )
         self.entry_email = self._field(conn, "Email", self.var_email, 3)
         self.entry_password = self._field(conn, "Password", self.var_password, 4, show="\u2022")
         self.entry_password.bind("<Return>", lambda _event: self._sign_in())
@@ -527,16 +551,41 @@ class ProbeWindow(tk.Tk):
 
     # -- signing in ------------------------------------------------------
 
-    def _credentials(self) -> tuple[str, str, str, str] | None:
-        """Read server and credentials off the form, reporting the first gap."""
-        raw_server = self.var_server.get().strip()
-        if not raw_server:
+    def _refresh_server_hint(self, *_args) -> None:
+        """Say which scheme a bare ``host:port`` will be given."""
+        scheme = "http" if self.var_plain_http.get() else self.scheme
+        self.var_server_hint.set(f"host, host:port or a full URL ({scheme}:// is assumed)")
+
+    def _server_url(self) -> str | None:
+        """The typed address as a base URL, or None with the reason on screen.
+
+        Ticking "Plain http" both permits an http:// address and makes http the
+        assumed scheme, so a bench pointed at a development server on port 8000
+        does not silently get an https URL it can never connect to. An address
+        typed with its own scheme keeps it either way.
+        """
+        raw = self.var_server.get().strip()
+        if not raw:
             self._set_status("Enter the LabNexus server address.", ERR)
             return None
+        plain_http = self.var_plain_http.get()
+        scheme = "http" if plain_http else self.scheme
         try:
-            server = normalise_server(raw_server, self.scheme, allow_http=self.https_override)
-        except HttpDisabledError as exc:
-            self._set_status(str(exc), ERR)
+            return normalise_server(raw, scheme, allow_http=plain_http)
+        except HttpDisabledError:
+            # The CLI's advice ("pass --https-override true") is useless here;
+            # in the window the same choice is a checkbox.
+            self._set_status(
+                f"{raw} is a plain http address. Tick 'Plain http' to allow it, "
+                "or use an https:// server.",
+                ERR,
+            )
+            return None
+
+    def _credentials(self) -> tuple[str, str, str, str] | None:
+        """Read server and credentials off the form, reporting the first gap."""
+        server = self._server_url()
+        if server is None:
             return None
 
         email = self.var_email.get().strip()
@@ -708,12 +757,8 @@ class ProbeWindow(tk.Tk):
         # Pyprobe workspace when none is given.
         workspace = self._selected_workspace_id()
 
-        try:
-            server = normalise_server(
-                self.var_server.get(), self.scheme, allow_http=self.https_override
-            )
-        except HttpDisabledError as exc:
-            self._set_status(str(exc), ERR)
+        server = self._server_url()
+        if server is None:
             return None
 
         return replace(

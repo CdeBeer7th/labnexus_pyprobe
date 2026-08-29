@@ -207,6 +207,13 @@ Fill in the server and email, then either a password or a pyProbe token, and pre
 **Sign in** (or Enter in either credential field). A token wins over a password when
 both are filled in.
 
+A bare `host:port` is assumed to be `https://`. For a server that speaks plain http —
+a development install on `localhost:8000`, say — tick **Plain http**: it both allows an
+`http://` address and makes `http` the scheme assumed for a bare host, which is the
+command line's `--scheme http --https-override true`. Pointing an https client at an
+http port fails at the TLS handshake, and pyProbe says so rather than blaming your
+credentials.
+
 Signing in is its own step, before anything is watched. It tells you straight away
 whether the address and credentials are right, and it fetches the account's workspaces
 so the **Workspace** dropdown lists real names instead of asking you for a UUID —
