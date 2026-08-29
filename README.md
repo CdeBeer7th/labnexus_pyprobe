@@ -49,8 +49,8 @@ uv tool install "labnexus-pyprobe[notify] @ git+https://github.com/CdeBeer7th/la
 
 ## Use
 
-Run it with no arguments and the desktop window opens, where you pick the folder to
-watch and type the server address:
+Run it with no arguments and the desktop window opens, where you type the server
+address, sign in, and pick the folder to watch:
 
 ```bash
 labnexus-pyprobe
@@ -201,6 +201,28 @@ Run `labnexus-pyprobe --help` for the full list of options.
 in the window. Where no window can be opened (a headless Linux box with no `DISPLAY`),
 the bare command falls back to the terminal front end.
 
+#### Signing in from the window
+
+Fill in the server and email, then either a password or a pyProbe token, and press
+**Sign in** (or Enter in either credential field). A token wins over a password when
+both are filled in.
+
+Signing in is its own step, before anything is watched. It tells you straight away
+whether the address and credentials are right, and it fetches the account's workspaces
+so the **Workspace** dropdown lists real names instead of asking you for a UUID —
+picking one there is the same as `--workspace ID`. Left as the account's **Pyprobe**
+workspace, parsed runs are filed there. If the workspace list cannot be read, the box
+stays typeable and a pasted id still works.
+
+The session is held for as long as the window is signed in: Start and Stop reuse it,
+so pausing a bench for an hour does not mean signing in again. **Sign out** ends it, and
+editing the server, email, password or token drops it too — those details no longer
+match the session in hand, so pyProbe asks you to sign in again rather than uploading
+under the old one. Pressing **Start** without signing in first signs in and then starts.
+
+Running `--gui` with `--email` and `--pyprobe-token` (or `LABNEXUS_EMAIL` and
+`LABNEXUS_PYPROBE_TOKEN`) signs in as soon as the window opens.
+
 Desktop notifications are on by default and use whatever the OS provides
 (`notify-send` on Linux, `osascript` on macOS, toasts on Windows). `--no-notify` turns them off.
 
@@ -255,7 +277,7 @@ uv run labnexus-pyprobe --help
 | `client.py` | LabNexus HTTP: password and pyProbe-token sign-in, workspaces, plain and structured uploads |
 | `watcher.py` | The scan loop, parsing, change detection, history — emits `ProbeEvent`s |
 | `tui.py` | Rich terminal dashboard |
-| `gui.py` | Tkinter desktop window |
+| `gui.py` | Tkinter desktop window: sign-in, workspace picker, queue form, live log |
 | `plain.py` | Plain logging front end |
 | `notify.py` | Cross-platform desktop notifications |
 | `prober.py` | Backwards-compatible `FileWatcher()` wrapper |

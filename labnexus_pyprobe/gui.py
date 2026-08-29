@@ -9,13 +9,14 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import filedialog, ttk
 
 from labnexus_plate_parsers import SpectrometerModel, resolve_model
 
-from .client import AuthError, LabNexusClient, UploadError
+from .client import AuthError, CaptchaRequired, LabNexusClient, UploadError, Workspace
 from .config import DEFAULT_EXCLUDES, HttpDisabledError, Queue, Settings, normalise_server
 from .formatting import human_size
 from .notify import Notifier
@@ -48,6 +49,56 @@ NO_MODEL = "(no parsing - upload as-is)"
 MODEL_CHOICES = [NO_MODEL] + [m.value for m in SpectrometerModel]
 
 
+@dataclass
+class Session:
+    """A signed-in LabNexus session, and what the sign-in told us about it."""
+
+    client: LabNexusClient
+    email: str
+    workspaces: list[Workspace] = field(default_factory=list)
+    #: Why the workspace list is empty, when the session itself is fine.
+    workspace_error: str | None = None
+
+
+def sign_in(
+    server: str,
+    email: str,
+    *,
+    pyprobe_token: str = "",
+    password: str = "",
+    timeout: float = 60.0,
+    retries: int = 2,
+    verify_tls: bool = True,
+) -> Session:
+    """Authenticate against *server* and read back the account's workspaces.
+
+    Kept out of the window class so it is a plain function of its arguments:
+    the window can call it on a worker thread, and it can be tested without a
+    display. A pyProbe token wins over a password when both are given - it
+    skips the CAPTCHA and second factor a password login may demand.
+
+    Raises :class:`AuthError` (or :class:`CaptchaRequired`) if the credentials
+    are refused. A session that authenticates but cannot list workspaces is
+    still returned: the user can type a workspace id the dropdown never
+    offered, so that failure is reported rather than fatal.
+    """
+    client = LabNexusClient(server, timeout=timeout, retries=retries, verify_tls=verify_tls)
+    try:
+        if pyprobe_token:
+            who = client.authenticate_pyprobe(email, pyprobe_token)
+        else:
+            client.login(email, password)
+            who = email
+    except AuthError:
+        client.close()
+        raise
+
+    try:
+        return Session(client=client, email=who, workspaces=client.workspaces())
+    except (AuthError, UploadError) as exc:
+        return Session(client=client, email=who, workspace_error=str(exc))
+
+
 class ProbeWindow(tk.Tk):
     """The pyProbe control window: configure a session, start it, watch it work."""
 
@@ -66,9 +117,19 @@ class ProbeWindow(tk.Tk):
         self.scheme = scheme
         self.https_override = https_override
         self.events: queue.Queue[ProbeEvent] = queue.Queue()
+        #: Work a background thread wants done on the Tk thread. Tk widgets
+        #: are not thread-safe, and ``after()`` from another thread is only
+        #: safe while the main loop is actually running - draining a queue in
+        #: :meth:`_drain` is true whatever the window is doing.
+        self.ui_calls: queue.Queue[Callable[[], None]] = queue.Queue()
         self.watcher: Watcher | None = None
         self.worker: threading.Thread | None = None
         self.notifier = Notifier(settings.notify)
+        #: The signed-in session, or None until the user signs in. Held on the
+        #: window so one sign-in serves every start/stop of the watcher.
+        self.session: Session | None = None
+        self._signing_in = False
+        self._start_when_signed_in = False
 
         self.title("pyProbe - LabNexus data sync")
         self.configure(bg=BG)
@@ -81,6 +142,10 @@ class ProbeWindow(tk.Tk):
         self._focus_first_gap()
         self.after(100, self._drain)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if email and pyprobe_token:
+            # Everything an unattended sign-in needs came in on the command
+            # line, so spend it now instead of waiting for the button.
+            self.after(0, self._sign_in)
 
     # -- setup -----------------------------------------------------------
 
@@ -97,8 +162,14 @@ class ProbeWindow(tk.Tk):
         self._workspace_ids: dict[str, str] = {}
         self.var_only_new = tk.BooleanVar(value=s.only_new)
         self.var_notify = tk.BooleanVar(value=s.notify)
-        self.var_status = tk.StringVar(value="Idle - choose a folder and server, then press Start.")
+        self.var_status = tk.StringVar(value="Idle - sign in, choose a folder, then press Start.")
         self.var_counts = tk.StringVar(value="")
+        self.var_session = tk.StringVar(value="Not signed in")
+
+        # Changing any of these invalidates the session they bought, so the
+        # window drops it rather than uploading with a stale one.
+        for var in (self.var_server, self.var_email, self.var_password, self.var_pyprobe_token):
+            var.trace_add("write", self._on_credentials_changed)
 
     def _init_style(self) -> None:
         style = ttk.Style(self)
@@ -242,10 +313,37 @@ class ProbeWindow(tk.Tk):
         if not self.var_server.get().strip():
             self.entry_server.focus_set()
             return
+        if not self.var_email.get().strip():
+            self.entry_email.focus_set()
+            return
+        if self.session is None:
+            self.btn_sign_in.focus_set()
+            return
         if not self.queue_rows:
             self.btn_add_queue.focus_set()
             return
         self.btn_start.focus_set()
+
+    def _build_signin(self, parent: ttk.Frame) -> ttk.Frame:
+        """The sign-in row: a button, its counterpart, and who is signed in."""
+        bar = ttk.Frame(parent, style="Card.TFrame")
+        bar.columnconfigure(2, weight=1)
+        self.btn_sign_in = ttk.Button(
+            bar, text="Sign in", style="Browse.TButton", command=self._sign_in
+        )
+        self.btn_sign_in.grid(row=0, column=0, sticky="w")
+        self.btn_sign_out = ttk.Button(
+            bar,
+            text="Sign out",
+            style="Browse.TButton",
+            command=self._sign_out,
+            state="disabled",
+        )
+        self.btn_sign_out.grid(row=0, column=1, sticky="w", padx=(6, 10))
+        ttk.Label(bar, textvariable=self.var_session, style="Hint.TLabel").grid(
+            row=0, column=2, sticky="w"
+        )
+        return bar
 
     def _build_form(self, parent: ttk.Frame) -> ttk.Frame:
         wrap = ttk.Frame(parent)
@@ -256,21 +354,26 @@ class ProbeWindow(tk.Tk):
         conn.columnconfigure(1, weight=1)
         self.entry_server = self._field(conn, "Server", self.var_server, 1)
         self._hint(conn, f"host, host:port or a full URL ({self.scheme}:// is assumed)", 2)
-        self._field(conn, "Email", self.var_email, 3)
-        self._field(conn, "Password", self.var_password, 4, show="\u2022")
-        self._field(conn, "pyProbe token", self.var_pyprobe_token, 5, show="\u2022")
+        self.entry_email = self._field(conn, "Email", self.var_email, 3)
+        self.entry_password = self._field(conn, "Password", self.var_password, 4, show="\u2022")
+        self.entry_password.bind("<Return>", lambda _event: self._sign_in())
+        entry_token = self._field(conn, "pyProbe token", self.var_pyprobe_token, 5, show="\u2022")
+        entry_token.bind("<Return>", lambda _event: self._sign_in())
         self._hint(conn, "optional; from Settings -> pyProbe, used instead of the password", 6)
 
+        conn.rowconfigure(7, minsize=8)
+        self._build_signin(conn).grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+
         ttk.Label(conn, text="Workspace", style="Field.TLabel").grid(
-            row=7, column=0, sticky="w", padx=(0, 12), pady=4
+            row=9, column=0, sticky="w", padx=(0, 12), pady=4
         )
-        # Populated from the server after the first successful sign-in; until
-        # then it stays an editable box so a known id can just be pasted in.
+        # Populated by signing in; until then it stays an editable box so a
+        # known id can just be pasted in.
         self.combo_workspace = ttk.Combobox(
             conn, textvariable=self.var_workspace, values=[], state="normal"
         )
-        self.combo_workspace.grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
-        self._hint(conn, "optional; left blank, parsed runs are filed under Pyprobe", 8)
+        self.combo_workspace.grid(row=9, column=1, columnspan=2, sticky="ew", pady=4)
+        self._hint(conn, "optional; left blank, parsed runs are filed under Pyprobe", 10)
         conn.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
 
         watch = self._card(wrap, "Queues")
@@ -414,6 +517,170 @@ class ProbeWindow(tk.Tk):
         self.var_status.set(message)
         self.dot.itemconfigure("dot", fill=colour)
 
+    # -- signing in ------------------------------------------------------
+
+    def _credentials(self) -> tuple[str, str, str, str] | None:
+        """Read server and credentials off the form, reporting the first gap."""
+        raw_server = self.var_server.get().strip()
+        if not raw_server:
+            self._set_status("Enter the LabNexus server address.", ERR)
+            return None
+        try:
+            server = normalise_server(raw_server, self.scheme, allow_http=self.https_override)
+        except HttpDisabledError as exc:
+            self._set_status(str(exc), ERR)
+            return None
+
+        email = self.var_email.get().strip()
+        if not email:
+            self._set_status("Enter the email of your LabNexus account.", ERR)
+            return None
+
+        # A pyProbe token needs the email beside it, so both paths want one.
+        token = self.var_pyprobe_token.get().strip()
+        password = self.var_password.get()
+        if not token and not password:
+            self._set_status("Enter your password, or a pyProbe token.", ERR)
+            return None
+        return server, email, token, password
+
+    def _sign_in(self, then_start: bool = False) -> None:
+        """Authenticate and load the workspace list, off the Tk thread."""
+        if self._signing_in:
+            return
+        credentials = self._credentials()
+        if credentials is None:
+            return
+        server, email, token, password = credentials
+
+        self._signing_in = True
+        self._start_when_signed_in = then_start
+        self.btn_sign_in.configure(state="disabled")
+        self.btn_start.configure(state="disabled")
+        self.var_session.set("Signing in...")
+        self._set_status(f"Signing in to {server}...", WARN)
+        threading.Thread(
+            target=self._do_sign_in,
+            args=(server, email, token, password),
+            daemon=True,
+            name="pyprobe-signin",
+        ).start()
+
+    def _do_sign_in(self, server: str, email: str, token: str, password: str) -> None:
+        """The network half of signing in. Runs on a worker thread."""
+        try:
+            session = sign_in(
+                server,
+                email,
+                pyprobe_token=token,
+                password=password,
+                timeout=self.settings.timeout,
+                retries=self.settings.retries,
+                verify_tls=self.settings.verify_tls,
+            )
+        except CaptchaRequired as exc:
+            self._on_ui_thread(self._signed_in_failed, str(exc))
+        except AuthError as exc:
+            self._on_ui_thread(self._signed_in_failed, str(exc))
+        else:
+            self._on_ui_thread(self._signed_in, session)
+
+    def _signed_in(self, session: Session) -> None:
+        """A live session arrived: remember it and show what it can reach."""
+        self._signing_in = False
+        self.session = session
+        self.var_session.set(f"Signed in as {session.email}")
+        self.btn_sign_in.configure(state="disabled")
+        self.btn_sign_out.configure(state="normal")
+        self.btn_start.configure(state="normal")
+        self._apply_workspaces(session)
+
+        client = session.client
+        if session.workspace_error:
+            self.events.put(
+                ProbeEvent("info", "Could not load workspaces", detail=session.workspace_error)
+            )
+            self._set_status(
+                f"Signed in as {session.email}, but the workspace list is unavailable.", WARN
+            )
+        else:
+            self._set_status(
+                f"Signed in as {session.email} - {len(session.workspaces)} workspace(s).", OK
+            )
+        self.events.put(
+            ProbeEvent(
+                "info",
+                f"Signed in to {client.base_url} as {session.email}",
+                detail=f"{len(session.workspaces)} workspace(s)",
+            )
+        )
+
+        if self._start_when_signed_in:
+            self._start_when_signed_in = False
+            self._start()
+
+    def _signed_in_failed(self, message: str) -> None:
+        self._signing_in = False
+        self._start_when_signed_in = False
+        self.var_session.set("Not signed in")
+        self.btn_sign_in.configure(state="normal")
+        self.btn_start.configure(state="normal")
+        self._set_status(message, ERR)
+        self.events.put(ProbeEvent("error", "Sign-in failed", detail=message))
+
+    def _apply_workspaces(self, session: Session) -> None:
+        """Offer the fetched workspaces in the dropdown.
+
+        A workspace id already in the box - typed, pasted or passed with
+        ``--workspace`` - is swapped for its name now that the mapping is
+        known, so the user sees where uploads are going. An empty box is left
+        empty unless the server named a default: blank means "file it under
+        the account's Pyprobe workspace", which is a real choice, not a gap.
+        """
+        client = session.client
+        self._workspace_ids = {w.name: w.id for w in session.workspaces}
+        if client.default_workspace_name and client.default_workspace_id:
+            self._workspace_ids.setdefault(
+                client.default_workspace_name, client.default_workspace_id
+            )
+        self.combo_workspace.configure(values=list(self._workspace_ids))
+
+        current = self.var_workspace.get().strip()
+        if not current:
+            if client.default_workspace_name:
+                self.var_workspace.set(client.default_workspace_name)
+            return
+        for name, workspace_id in self._workspace_ids.items():
+            if current == workspace_id:
+                self.var_workspace.set(name)
+                return
+
+    def _sign_out(self) -> None:
+        if self.watcher is not None:
+            self._set_status("Stop the sync before signing out.", WARN)
+            return
+        self._drop_session("Signed out.")
+
+    def _drop_session(self, message: str) -> None:
+        """Close the session and put the window back in its signed-out state."""
+        session, self.session = self.session, None
+        if session is not None:
+            session.client.close()
+        self.var_session.set("Not signed in")
+        self.btn_sign_in.configure(state="normal")
+        self.btn_sign_out.configure(state="disabled")
+        self._set_status(message, MUTED)
+
+    def _on_credentials_changed(self, *_args) -> None:
+        """Editing the connection details invalidates the session they bought.
+
+        A running sync keeps the session it started with - pulling the client
+        out from under the watcher mid-upload would just fail the upload.
+        """
+        if self.session is None or self.watcher is not None:
+            return
+        self._drop_session("Connection details changed - sign in again.")
+
     def _collect(self) -> Settings | None:
         """Validate the form and fold it back into a Settings object."""
         if not self.var_server.get().strip():
@@ -494,6 +761,10 @@ class ProbeWindow(tk.Tk):
         settings = self._collect()
         if settings is None:
             return
+        if self.session is None:
+            # Start doubles as Sign in for anyone who skipped the button.
+            self._sign_in(then_start=True)
+            return
         self.settings = settings
         self.notifier = Notifier(settings.notify)
         self.btn_start.configure(state="disabled")
@@ -503,67 +774,54 @@ class ProbeWindow(tk.Tk):
         self.worker.start()
 
     def _session(self) -> None:
-        """Log in and run the watcher. Runs off the Tk thread; talks back via the queue."""
+        """Run the watcher on the signed-in session. Talks back via the queue.
+
+        The session outlives one run: stopping and starting again reuses it,
+        so a bench that pauses for an hour does not have to sign in twice.
+        """
+        session = self.session
         settings = self.settings
-        client = LabNexusClient(
-            settings.server,
-            timeout=settings.timeout,
-            retries=settings.retries,
-            verify_tls=settings.verify_tls,
-        )
-        email = self.var_email.get().strip()
-        pyprobe_token = self.var_pyprobe_token.get().strip()
-        try:
-            # A pyProbe token skips the CAPTCHA and second factor a password
-            # login would need, so it wins whenever one has been supplied.
-            if pyprobe_token and email:
-                client.authenticate_pyprobe(email, pyprobe_token)
-            elif pyprobe_token:
-                raise AuthError("A pyProbe token also needs the account email.")
-            else:
-                client.login(email, self.var_password.get())
-        except AuthError as exc:
-            self.events.put(ProbeEvent("error", "Login failed", detail=str(exc)))
+        if session is None:  # _start signs in first, so this is belt and braces.
+            self.events.put(ProbeEvent("error", "Not signed in"))
             self.events.put(ProbeEvent("stopped", "Not connected"))
             return
 
-        self.events.put(ProbeEvent("info", f"Connected to {settings.server}"))
-        if not settings.workspace_id and client.default_workspace_name:
+        self.events.put(ProbeEvent("info", f"Watching for {session.email} on {settings.server}"))
+        if not settings.workspace_id and session.client.default_workspace_name:
             self.events.put(
                 ProbeEvent(
                     "info",
-                    f"Parsed runs will be filed under {client.default_workspace_name}",
+                    f"Parsed runs will be filed under {session.client.default_workspace_name}",
                 )
             )
-        self._load_workspaces(client)
-        self.watcher = Watcher(settings, client, on_event=self.events.put)
+        # Held locally as well: _apply clears self.watcher the moment the
+        # "stopped" event is drained, which happens on the other thread.
+        watcher = Watcher(settings, session.client, on_event=self.events.put)
+        self.watcher = watcher
         try:
-            self.watcher.run()
+            watcher.run()
         finally:
-            client.close()
-            self.events.put(ProbeEvent("stopped", "Session closed"))
+            self.events.put(ProbeEvent("stopped", "Sync stopped"))
 
-    def _load_workspaces(self, client: LabNexusClient) -> None:
-        """Fill the workspace dropdown once we have a session that can ask.
+        if not watcher.stopping:
+            # It ended by itself rather than on Stop; an expired or revoked
+            # session is the usual reason, so find out instead of leaving a
+            # dead one on show.
+            self._verify_session(session)
 
-        Best-effort: a session that cannot list workspaces can still upload to
-        an id the user typed, so a failure here is reported and moved past.
-        """
+    def _verify_session(self, session: Session) -> None:
+        """Drop *session* if the server has stopped accepting it."""
         try:
-            spaces = client.workspaces()
-        except (AuthError, UploadError) as exc:
-            self.events.put(
-                ProbeEvent("info", "Could not load workspaces", detail=str(exc))
-            )
-            return
+            session.client.workspaces()
+        except AuthError:
+            self._on_ui_thread(self._session_expired, session)
+        except UploadError:
+            pass  # The server is unreachable or unhappy; the session may be fine.
 
-        labels = [w.name for w in spaces]
-        self._workspace_ids = {w.name: w.id for w in spaces}
-        current = self.var_workspace.get().strip()
-        # Tk widgets are not thread-safe and this runs on the worker thread.
-        self.after(0, lambda: self.combo_workspace.configure(values=labels))
-        if not current and labels:
-            self.after(0, lambda: self.var_workspace.set(labels[0]))
+    def _session_expired(self, session: Session) -> None:
+        """Runs on the Tk thread; ignores a session the user already replaced."""
+        if self.session is session:
+            self._drop_session("Session ended - sign in again.")
 
     def _stop(self) -> None:
         self._set_status("Stopping...", WARN)
@@ -572,8 +830,22 @@ class ProbeWindow(tk.Tk):
 
     # -- event pump ------------------------------------------------------
 
+    def _on_ui_thread(self, func: Callable[..., None], *args) -> None:
+        """Queue *func* to run on the Tk thread. Safe to call from a worker."""
+        self.ui_calls.put(lambda: func(*args))
+
     def _drain(self) -> None:
-        """Move watcher events onto the widgets. Runs on the Tk thread every 100 ms."""
+        """Move queued work and watcher events onto the widgets.
+
+        Runs on the Tk thread every 100 ms - the one place background threads
+        are allowed to reach the widgets, and the only place that touches them.
+        """
+        while True:
+            try:
+                call = self.ui_calls.get_nowait()
+            except queue.Empty:
+                break
+            call()
         while True:
             try:
                 event = self.events.get_nowait()
@@ -617,7 +889,11 @@ class ProbeWindow(tk.Tk):
             self._set_status(f"Uploaded {event.name}", OK)
             self.notifier.send("pyProbe - upload complete", f"{event.name} is on the server.")
         elif event.kind in ("failed", "error"):
-            self._set_status(event.message, ERR)
+            # The detail is the useful half of a failure ("HTTP 500", "token
+            # expired"), so it goes in the status bar too, not just the table.
+            self._set_status(
+                f"{event.message} - {event.detail}" if event.detail else event.message, ERR
+            )
             self.notifier.send("pyProbe - problem", f"{event.message}: {event.detail or ''}")
 
     def _refresh_counts(self) -> None:
@@ -634,6 +910,9 @@ class ProbeWindow(tk.Tk):
             self.watcher.stop()
         if self.worker and self.worker.is_alive():
             self.worker.join(timeout=3)
+        if self.session is not None:
+            self.session.client.close()
+            self.session = None
         self.destroy()
 
 
