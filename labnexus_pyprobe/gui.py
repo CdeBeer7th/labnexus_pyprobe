@@ -501,7 +501,15 @@ class ProbeWindow(tk.Tk):
         self.dot = tk.Canvas(bar, width=9, height=9, bg=PANEL, highlightthickness=0)
         self.dot.create_oval(1, 1, 8, 8, fill=MUTED, outline="", tags="dot")
         self.dot.pack(side="left", padx=(0, 8))
-        ttk.Label(bar, textvariable=self.var_status, style="Status.TLabel").pack(side="left")
+        self.status_label = ttk.Label(bar, textvariable=self.var_status, style="Status.TLabel")
+        self.status_label.pack(side="left", fill="x", expand=True)
+        # Why a sign-in was refused takes a sentence or two to say properly, and
+        # a clipped explanation is no explanation - so the bar wraps instead,
+        # re-measured whenever the window is resized.
+        bar.bind(
+            "<Configure>",
+            lambda event: self.status_label.configure(wraplength=max(200, event.width - 40)),
+        )
         return bar
 
     # -- actions ---------------------------------------------------------

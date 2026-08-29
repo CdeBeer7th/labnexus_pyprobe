@@ -34,6 +34,9 @@ def spark_export() -> Path:
 class Handler(BaseHTTPRequestHandler):
     uploads: list[bytes] = []
     spectrometer_uploads: list[dict] = []
+    #: Every request, as (method, path) - so a test can assert which endpoint
+    #: a credential combination actually reached, not just that it worked.
+    requests: list[tuple[str, str]] = []
 
     def log_message(self, *args):  # silence the default stderr spam
         pass
@@ -50,6 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Authorization") == f"Bearer {TOKEN}"
 
     def do_GET(self):
+        Handler.requests.append(("GET", self.path))
         if not self._authed():
             return self._json(401, {"detail": "Unauthorized"})
 
@@ -70,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"detail": "Not Found"})
 
     def do_POST(self):
+        Handler.requests.append(("POST", self.path))
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
@@ -140,6 +145,7 @@ class Handler(BaseHTTPRequestHandler):
 def server():
     Handler.uploads = []
     Handler.spectrometer_uploads = []
+    Handler.requests = []
     httpd = HTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -151,6 +157,12 @@ def server():
 @pytest.fixture
 def uploads():
     return Handler.uploads
+
+
+@pytest.fixture
+def requests_seen():
+    """(method, path) for every request the fake server has answered."""
+    return Handler.requests
 
 
 @pytest.fixture
