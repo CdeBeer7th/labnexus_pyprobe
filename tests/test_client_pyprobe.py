@@ -43,6 +43,38 @@ class TestTokenExchange:
         assert client.default_workspace_id == PYPROBE_WORKSPACE_ID
         assert client.default_workspace_name == PYPROBE_WORKSPACE_NAME
 
+    def test_uses_the_token_endpoint_and_nothing_else(self, server, requests_seen):
+        """The exchange is one POST to /auth/pyprobe/token - no password login.
+
+        Pinned on the wire rather than by reading the code: a regression that
+        quietly fell back to /auth/jwt/login would still "work" against a
+        server that accepts both, and only fail on an account with a CAPTCHA
+        or a second factor - which is exactly who uses a token.
+        """
+        client = make_client(server)
+
+        client.authenticate_pyprobe("me@lab.org", PYPROBE_TOKEN)
+
+        assert requests_seen == [("POST", "/auth/pyprobe/token")]
+
+    def test_sends_the_email_and_token_as_json(self, server):
+        """The body shape the server's PyProbeAuthRequest model expects."""
+        client = make_client(server)
+        sent = {}
+
+        original = client.session.post
+
+        def capture(url, **kwargs):
+            sent.update(url=url, json=kwargs.get("json"), data=kwargs.get("data"))
+            return original(url, **kwargs)
+
+        client.session.post = capture
+        client.authenticate_pyprobe("me@lab.org", PYPROBE_TOKEN)
+
+        assert sent["url"].endswith("/auth/pyprobe/token")
+        assert sent["json"] == {"email": "me@lab.org", "token": PYPROBE_TOKEN}
+        assert sent["data"] is None  # JSON, not a form post
+
     def test_rejects_a_bad_token(self, server):
         client = make_client(server)
 

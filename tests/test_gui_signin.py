@@ -61,6 +61,44 @@ class TestSignIn:
         assert session.client.logged_in
         session.client.close()
 
+    def test_a_token_never_triggers_a_password_login(self, server, requests_seen):
+        """With a token in hand, /auth/jwt/login must not be touched at all.
+
+        The password path drags in a CAPTCHA lookup and, on an MFA account, a
+        second factor nobody is at the bench to answer - so falling back to it
+        is a silent failure, not a graceful one.
+        """
+        session = sign_in(url(server), "me@lab.org", pyprobe_token=PYPROBE_TOKEN)
+
+        assert ("POST", "/auth/jwt/login") not in requests_seen
+        assert ("GET", "/captcha/config") not in requests_seen
+        assert requests_seen[0] == ("POST", "/auth/pyprobe/token")
+        session.client.close()
+
+    def test_a_token_wins_over_a_filled_in_password(self, server, requests_seen):
+        """Both fields filled in is a token sign-in, not a password one."""
+        session = sign_in(
+            url(server), "me@lab.org", pyprobe_token=PYPROBE_TOKEN, password="hunter2"
+        )
+
+        assert ("POST", "/auth/jwt/login") not in requests_seen
+        assert requests_seen[0] == ("POST", "/auth/pyprobe/token")
+        session.client.close()
+
+    def test_a_password_never_touches_the_token_endpoint(self, server, requests_seen):
+        session = sign_in(url(server), "me@lab.org", password="hunter2")
+
+        assert ("POST", "/auth/pyprobe/token") not in requests_seen
+        assert ("POST", "/auth/jwt/login") in requests_seen
+        session.client.close()
+
+    def test_a_rejected_token_does_not_retry_with_the_password(self, server, requests_seen):
+        """A dead token fails the sign-in; it does not quietly try the other way."""
+        with pytest.raises(AuthError):
+            sign_in(url(server), "me@lab.org", pyprobe_token="lnxp_wrong", password="hunter2")
+
+        assert requests_seen == [("POST", "/auth/pyprobe/token")]
+
     def test_bad_credentials_raise(self, server):
         with pytest.raises(AuthError):
             sign_in(url(server), "me@lab.org", password="wrong")

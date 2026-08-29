@@ -22,6 +22,11 @@ API_PREFIX = "/api"
 #: outside API_PREFIX: it is what a bench client calls before it has a session.
 PYPROBE_AUTH_PATH = "/auth/pyprobe/token"
 
+#: What a minted pyProbe token starts with, mirroring the server's own prefix.
+#: Only used to explain a rejection - a token that does not look like one is
+#: still sent, since the server, not this client, decides what is valid.
+PYPROBE_TOKEN_PREFIX = "lnxp_"  # noqa: S105 - a public prefix, not a secret
+
 
 class AuthError(RuntimeError):
     """Raised when the server rejects the supplied credentials or token."""
@@ -142,11 +147,23 @@ class LabNexusClient:
                 "Too many sign-in attempts from this machine. Wait a few minutes and try again."
             )
         if response.status_code in (400, 401, 403):
-            raise AuthError(
-                "The server rejected that email and pyProbe token. Check the "
-                "token has not expired or been revoked (Settings -> pyProbe in "
-                "the web interface)."
+            # The server answers every rejection with the same opaque 401 -
+            # deliberately, so this endpoint cannot be used to probe which
+            # addresses have bench clients. That leaves the client to spell out
+            # what it could have been.
+            reasons = (
+                "The server rejected that email and pyProbe token, and answers "
+                "every reason identically: the token has expired, been revoked "
+                "or been mistyped; the email is not the account it was minted "
+                "for; or that account is unverified or deactivated. Check it "
+                "under Settings -> pyProbe in the web interface."
             )
+            if not access_token.startswith(PYPROBE_TOKEN_PREFIX):
+                reasons += (
+                    f" (What was sent does not look like a pyProbe token - "
+                    f"they start with {PYPROBE_TOKEN_PREFIX!r}.)"
+                )
+            raise AuthError(reasons)
         if not response.ok:
             raise AuthError(
                 f"pyProbe sign-in failed: HTTP {response.status_code} - {response.text[:200]}"
