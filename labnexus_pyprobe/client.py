@@ -18,6 +18,10 @@ from .captcha import solve_pow_challenge
 #: at the root, so the two cannot share one base.
 API_PREFIX = "/api"
 
+#: Where a pyProbe access token is exchanged for a bearer session. Deliberately
+#: outside API_PREFIX: it is what a bench client calls before it has a session.
+PYPROBE_AUTH_PATH = "/auth/pyprobe/token"
+
 
 class AuthError(RuntimeError):
     """Raised when the server rejects the supplied credentials or token."""
@@ -68,6 +72,11 @@ class LabNexusClient:
         self.session = requests.Session()
         self.session.verify = verify_tls
         self.token: str | None = None
+        #: Filled in by :meth:`authenticate_pyprobe` - the workspace the server
+        #: files this account's unattributed runs under. Lets the bench client
+        #: report where uploads went without a separate lookup.
+        self.default_workspace_id: str | None = None
+        self.default_workspace_name: str | None = None
 
     def _api(self, path: str) -> str:
         return f"{self.base_url}{API_PREFIX}/{path.lstrip('/')}"
@@ -106,6 +115,55 @@ class LabNexusClient:
 
         self.use_token(token)
         return token
+
+    def authenticate_pyprobe(self, email: str, access_token: str) -> str:
+        """Exchange a pyProbe access token for a session, and remember it.
+
+        This is the unattended path: no password, no CAPTCHA, no second factor
+        to type. The user mints the token in the web UI under Settings →
+        pyProbe, and it is presented together with the account email — the
+        token alone is not enough. The session it buys expires with the token,
+        whichever comes first, so a long-lived bench install re-authenticates
+        on each run rather than holding one session open forever.
+
+        Returns the account email the server confirmed the token belongs to.
+        """
+        try:
+            response = self.session.post(
+                f"{self.base_url}{PYPROBE_AUTH_PATH}",
+                json={"email": email, "token": access_token},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AuthError(f"Could not reach {self.base_url}: {exc}") from exc
+
+        if response.status_code == 429:
+            raise AuthError(
+                "Too many sign-in attempts from this machine. Wait a few minutes and try again."
+            )
+        if response.status_code in (400, 401, 403):
+            raise AuthError(
+                "The server rejected that email and pyProbe token. Check the "
+                "token has not expired or been revoked (Settings -> pyProbe in "
+                "the web interface)."
+            )
+        if not response.ok:
+            raise AuthError(
+                f"pyProbe sign-in failed: HTTP {response.status_code} - {response.text[:200]}"
+            )
+
+        try:
+            payload = response.json()
+            token = payload["access_token"]
+        except (ValueError, KeyError) as exc:
+            raise AuthError(
+                "pyProbe sign-in succeeded but the server returned no session token."
+            ) from exc
+
+        self.use_token(token)
+        self.default_workspace_id = payload.get("default_workspace_id") or None
+        self.default_workspace_name = payload.get("default_workspace_name") or None
+        return str(payload.get("email") or email)
 
     def use_token(self, token: str) -> None:
         """Authenticate with a token obtained elsewhere (e.g. ``--token``)."""
@@ -343,7 +401,7 @@ class LabNexusClient:
         self,
         path: Path,
         model: SpectrometerModel,
-        workspace_id: str,
+        workspace_id: str | None = None,
         structured: UnifiedPlateReaderOutput | None = None,
     ) -> dict:
         """Upload a plate-reader export, with the structured parse alongside it.
@@ -352,11 +410,14 @@ class LabNexusClient:
         parsed document means the bench client's parse is what gets filed,
         rather than the server re-doing the same work on a possibly different
         parser release. The server re-validates it either way.
+
+        ``workspace_id`` is optional. Omitting it lets the server file the run
+        under the account's "Pyprobe" workspace, which it creates on first use
+        - the useful default for an unattended bench where nobody is around to
+        choose a destination.
         """
         if not self.logged_in:
             raise AuthError("No active session - log in before uploading.")
-        if not workspace_id:
-            raise UploadError(f"{path.name}: no workspace selected to upload into.")
 
         @contextmanager
         def build() -> Iterator[dict[str, Any]]:
@@ -366,10 +427,11 @@ class LabNexusClient:
                     data["structured"] = structured.model_dump_json()
                 yield {"data": data, "files": {"file": (path.name, handle)}}
 
+        query = "prober=true"
+        if workspace_id:
+            query = f"workspace_id={workspace_id}&{query}"
         url = self._api("/files/spectrometer/upload")
-        response = self._post_with_retries(
-            f"{url}?workspace_id={workspace_id}&prober=true", build_request=build
-        )
+        response = self._post_with_retries(f"{url}?{query}", build_request=build)
         try:
             return response.json()
         except ValueError:

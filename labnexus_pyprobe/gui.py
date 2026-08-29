@@ -55,6 +55,7 @@ class ProbeWindow(tk.Tk):
         self,
         settings: Settings,
         email: str = "",
+        pyprobe_token: str = "",
         version: str = "",
         scheme: str = "https",
         https_override: bool = False,
@@ -74,7 +75,7 @@ class ProbeWindow(tk.Tk):
         self.geometry("860x620")
         self.minsize(720, 520)
 
-        self._init_vars(email)
+        self._init_vars(email, pyprobe_token)
         self._init_style()
         self._build()
         self._focus_first_gap()
@@ -83,11 +84,12 @@ class ProbeWindow(tk.Tk):
 
     # -- setup -----------------------------------------------------------
 
-    def _init_vars(self, email: str) -> None:
+    def _init_vars(self, email: str, pyprobe_token: str = "") -> None:
         s = self.settings
         self.var_server = tk.StringVar(value=s.server)
         self.var_email = tk.StringVar(value=email)
         self.var_password = tk.StringVar()
+        self.var_pyprobe_token = tk.StringVar(value=pyprobe_token)
         self.var_interval = tk.StringVar(value=str(int(s.interval)))
         self.var_recursive = tk.BooleanVar(value=s.queues[0].recursive if s.queues else False)
         self.var_workspace = tk.StringVar(value=s.workspace_id or "")
@@ -256,17 +258,19 @@ class ProbeWindow(tk.Tk):
         self._hint(conn, f"host, host:port or a full URL ({self.scheme}:// is assumed)", 2)
         self._field(conn, "Email", self.var_email, 3)
         self._field(conn, "Password", self.var_password, 4, show="\u2022")
+        self._field(conn, "pyProbe token", self.var_pyprobe_token, 5, show="\u2022")
+        self._hint(conn, "optional; from Settings -> pyProbe, used instead of the password", 6)
 
         ttk.Label(conn, text="Workspace", style="Field.TLabel").grid(
-            row=5, column=0, sticky="w", padx=(0, 12), pady=4
+            row=7, column=0, sticky="w", padx=(0, 12), pady=4
         )
         # Populated from the server after the first successful sign-in; until
         # then it stays an editable box so a known id can just be pasted in.
         self.combo_workspace = ttk.Combobox(
             conn, textvariable=self.var_workspace, values=[], state="normal"
         )
-        self.combo_workspace.grid(row=5, column=1, columnspan=2, sticky="ew", pady=4)
-        self._hint(conn, "loaded after sign-in; parsed runs are filed here", 6)
+        self.combo_workspace.grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
+        self._hint(conn, "optional; left blank, parsed runs are filed under Pyprobe", 8)
         conn.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
 
         watch = self._card(wrap, "Queues")
@@ -425,10 +429,9 @@ class ProbeWindow(tk.Tk):
         if queues is None:
             return None
 
+        # Blank is allowed: the server files parsed runs under the account's
+        # Pyprobe workspace when none is given.
         workspace = self._selected_workspace_id()
-        if any(q.model for q in queues) and not workspace:
-            self._set_status("Choose a workspace to file parsed runs under.", ERR)
-            return None
 
         try:
             server = normalise_server(
@@ -508,14 +511,30 @@ class ProbeWindow(tk.Tk):
             retries=settings.retries,
             verify_tls=settings.verify_tls,
         )
+        email = self.var_email.get().strip()
+        pyprobe_token = self.var_pyprobe_token.get().strip()
         try:
-            client.login(self.var_email.get().strip(), self.var_password.get())
+            # A pyProbe token skips the CAPTCHA and second factor a password
+            # login would need, so it wins whenever one has been supplied.
+            if pyprobe_token and email:
+                client.authenticate_pyprobe(email, pyprobe_token)
+            elif pyprobe_token:
+                raise AuthError("A pyProbe token also needs the account email.")
+            else:
+                client.login(email, self.var_password.get())
         except AuthError as exc:
             self.events.put(ProbeEvent("error", "Login failed", detail=str(exc)))
             self.events.put(ProbeEvent("stopped", "Not connected"))
             return
 
         self.events.put(ProbeEvent("info", f"Connected to {settings.server}"))
+        if not settings.workspace_id and client.default_workspace_name:
+            self.events.put(
+                ProbeEvent(
+                    "info",
+                    f"Parsed runs will be filed under {client.default_workspace_name}",
+                )
+            )
         self._load_workspaces(client)
         self.watcher = Watcher(settings, client, on_event=self.events.put)
         try:
@@ -621,6 +640,7 @@ class ProbeWindow(tk.Tk):
 def run_gui(
     settings: Settings,
     email: str = "",
+    pyprobe_token: str = "",
     version: str = "",
     scheme: str = "https",
     https_override: bool = False,
@@ -628,7 +648,12 @@ def run_gui(
     """Entry point for ``--gui``. Returns a process exit code."""
     try:
         window = ProbeWindow(
-            settings, email=email, version=version, scheme=scheme, https_override=https_override
+            settings,
+            email=email,
+            pyprobe_token=pyprobe_token,
+            version=version,
+            scheme=scheme,
+            https_override=https_override,
         )
     except tk.TclError as exc:
         print(f"Could not open a window ({exc}). Run without --gui for the terminal UI.")

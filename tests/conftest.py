@@ -13,11 +13,14 @@ TOKEN = "test-token"
 VALID = {"me@lab.org": "hunter2"}
 WORKSPACE_ID = "11111111-2222-3333-4444-555555555555"
 
+#: A pyProbe access token and the workspace the server falls back to for it.
+PYPROBE_TOKEN = "lnxp_test-access-token"  # noqa: S105 - a fixture, not a secret
+PYPROBE_WORKSPACE_ID = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+PYPROBE_WORKSPACE_NAME = "Pyprobe"
+
 #: Real vendor exports, borrowed from the shared parser package so pyProbe's
 #: tests parse the same files the parsers are themselves tested against.
-FIXTURES = (
-    Path(__file__).resolve().parents[2] / "labnexus_plate_parsers" / "tests" / "fixtures"
-)
+FIXTURES = Path(__file__).resolve().parents[2] / "labnexus_plate_parsers" / "tests" / "fixtures"
 
 
 @pytest.fixture
@@ -69,6 +72,28 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
+
+        if self.path == "/auth/pyprobe/token":
+            try:
+                payload = json.loads(body or b"{}")
+            except ValueError:
+                payload = {}
+            # Both halves must match, exactly as the real server requires.
+            if payload.get("email", "").lower() in VALID and payload.get("token") == PYPROBE_TOKEN:
+                return self._json(
+                    200,
+                    {
+                        "access_token": TOKEN,
+                        "token_type": "bearer",
+                        "expires_in": 43200,
+                        "user_id": "cccccccc-dddd-eeee-ffff-000000000000",
+                        "email": "me@lab.org",
+                        "display_name": "Test User",
+                        "default_workspace_id": PYPROBE_WORKSPACE_ID,
+                        "default_workspace_name": PYPROBE_WORKSPACE_NAME,
+                    },
+                )
+            return self._json(401, {"detail": "Invalid email or pyProbe token."})
 
         if self.path == "/auth/jwt/login":
             fields = dict(pair.split("=", 1) for pair in body.decode().split("&") if "=" in pair)
