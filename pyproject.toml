@@ -56,6 +56,10 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
 ]
+# Standalone executables: see packaging/pyprobe.spec and .github/workflows/release.yml
+build = [
+    "pyinstaller>=6.11",
+]
 
 [tool.ruff]
 line-length = 100

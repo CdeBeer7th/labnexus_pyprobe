@@ -1,0 +1,152 @@
+name: Build executables
+
+# Push a tag like `v0.3.0` (matching the version in pyproject.toml) to build
+# every platform and publish a GitHub release. Pull requests and manual runs
+# build and upload the archives as workflow artifacts without releasing.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "labnexus_pyprobe/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Build with the python.org / actions/python-versions interpreter rather than a
+  # uv-managed one: those link Tcl/Tk the way PyInstaller expects, so the frozen
+  # GUI actually opens.
+  UV_PYTHON_PREFERENCE: only-system
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported Ubuntu, so the binary runs on any glibc >= 2.35.
+          - { target: linux-x86_64, os: ubuntu-22.04 }
+          - { target: linux-arm64, os: ubuntu-22.04-arm }
+          - { target: windows-x86_64, os: windows-latest }
+          - { target: macos-arm64, os: macos-15 }
+          - { target: macos-x86_64, os: macos-15-intel }
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # vendor/labnexus_plate_parsers is a private submodule; the default
+          # token can't read it. Add a fine-grained PAT with read access to
+          # that repo as the PLATE_PARSERS_TOKEN repository secret.
+          submodules: recursive
+          token: ${{ secrets.PLATE_PARSERS_TOKEN || github.token }}
+
+      - name: Install Tk (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tk
+
+      - uses: actions/setup-python@v6
+        id: python
+        with:
+          python-version-file: .python-version
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: >
+          uv sync --frozen --extra notify --group dev --group build
+          --python "${{ steps.python.outputs.python-path }}"
+
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(uv run --frozen python -c "from importlib.metadata import version; print(version('labnexus-pyprobe'))")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+
+      - name: Test
+        run: uv run --frozen pytest -q
+
+      - name: Build
+        run: uv run --frozen pyinstaller packaging/pyprobe.spec --noconfirm --clean
+
+      - name: Smoke test
+        run: |
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=".exe"
+          ./dist/labnexus-pyprobe$exe --version
+          ./dist/labnexus-pyprobe$exe --list-models
+          if [ "$RUNNER_OS" = macOS ]; then
+            ./dist/pyProbe.app/Contents/MacOS/pyProbe --version
+          fi
+
+      - name: Package
+        id: package
+        run: |
+          version=$(uv run --frozen python -c "from importlib.metadata import version; print(version('labnexus-pyprobe'))")
+          name="pyprobe-${version}-${{ matrix.target }}"
+          mkdir -p "stage/$name" out
+          cp README.md "stage/$name/"
+          case "$RUNNER_OS" in
+            Linux)
+              cp dist/labnexus-pyprobe dist/labnexus-pyprobe-gui "stage/$name/"
+              tar -C stage -czf "out/$name.tar.gz" "$name"
+              ;;
+            macOS)
+              cp dist/labnexus-pyprobe "stage/$name/"
+              cp -R dist/pyProbe.app "stage/$name/"
+              ditto -c -k --keepParent "stage/$name" "out/$name.zip"
+              ;;
+            Windows)
+              cp dist/labnexus-pyprobe.exe dist/labnexus-pyprobe-gui.exe "stage/$name/"
+              (cd stage && 7z a -tzip "../out/$name.zip" "$name" > /dev/null)
+              ;;
+          esac
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyprobe-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: pyprobe-*
+          path: out
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" out/*
+          --repo "$GITHUB_REPOSITORY"
+          --title "pyProbe ${GITHUB_REF_NAME#v}"
+          --generate-notes
+          --verify-tag

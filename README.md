@@ -29,6 +29,34 @@ One folder per instrument, as many as you have readers.
 
 ## Install
 
+### Standalone executables
+
+Each [release](https://github.com/CdeBeer7th/labnexus_pyprobe/releases) has ready-to-run
+builds that need no Python at all. Download the archive for your machine and unpack it:
+
+| Platform              | Archive                         | Contents                                         |
+| --------------------- | ------------------------------- | ------------------------------------------------ |
+| Windows               | `pyprobe-*-windows-x86_64.zip`  | `labnexus-pyprobe.exe`, `labnexus-pyprobe-gui.exe` |
+| macOS (Apple silicon) | `pyprobe-*-macos-arm64.zip`     | `pyProbe.app`, `labnexus-pyprobe`                |
+| macOS (Intel)         | `pyprobe-*-macos-x86_64.zip`    | `pyProbe.app`, `labnexus-pyprobe`                |
+| Linux x86-64          | `pyprobe-*-linux-x86_64.tar.gz` | `labnexus-pyprobe`, `labnexus-pyprobe-gui`       |
+| Linux ARM64           | `pyprobe-*-linux-arm64.tar.gz`  | `labnexus-pyprobe`, `labnexus-pyprobe-gui`       |
+
+`labnexus-pyprobe` is the full command-line tool described below (run with no arguments,
+it opens the desktop window). The `-gui` executable and `pyProbe.app` open the desktop
+window directly, without a terminal — the one to double-click or pin to a taskbar.
+
+The builds are not code-signed yet, so the OS warns on first launch:
+
+- **Windows** — SmartScreen says "Windows protected your PC": choose *More info → Run anyway*.
+- **macOS** — right-click `pyProbe.app` → *Open*, or clear the download flag with
+  `xattr -dr com.apple.quarantine pyProbe.app labnexus-pyprobe`.
+- **Linux** — needs glibc 2.35 or newer (Ubuntu 22.04, Debian 12, RHEL 10 and later).
+
+Check each download against `SHA256SUMS.txt` from the same release.
+
+### With uv
+
 pyProbe uses [uv](https://docs.astral.sh/uv/) for Python and dependency management.
 [Install uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
@@ -272,8 +300,38 @@ uv run labnexus-pyprobe --help
 
 `.python-version` pins the interpreter and `uv.lock` pins every dependency, so
 `uv sync` gives everyone the same environment. To change a dependency, edit
-`pyproject.toml` and run `uv lock`; to release, bump `version` in `pyproject.toml`
-(or `uv version --bump patch`) and tag.
+`pyproject.toml` and run `uv lock`.
+
+### Releasing
+
+Bump `version` in `pyproject.toml` (or `uv version --bump patch`), commit, then push a
+matching tag:
+
+```bash
+git tag v0.3.1 && git push origin v0.3.1
+```
+
+The [`Build executables`](.github/workflows/release.yml) workflow tests and builds
+Windows, macOS (arm64 and Intel) and Linux (x86-64 and ARM64) executables on native
+runners, then publishes a GitHub release with the archives and `SHA256SUMS.txt`. It
+refuses a tag that doesn't match the package version. Pull requests and manual runs
+build the same archives as workflow artifacts without releasing.
+
+The workflow needs one repository secret, `PLATE_PARSERS_TOKEN`: a fine-grained personal
+access token with *Contents: read* on `labnexus_plate_parsers`, so CI can check out the
+private submodule.
+
+To build locally for the machine you're on:
+
+```bash
+uv sync --group build
+uv run pyinstaller packaging/pyprobe.spec --noconfirm   # -> dist/
+```
+
+PyInstaller cannot cross-compile, and the GUI needs a Python whose Tk links the usual
+way: a python.org install or your distro's Python (with `python3-tk`), not a
+uv-managed one — with that, the frozen GUI fails with `undefined symbol: TclBN_...`.
+Point uv at it with `uv sync --group build --python /path/to/python3.13`.
 
 ### Layout
 
