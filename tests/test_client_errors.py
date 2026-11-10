@@ -77,7 +77,9 @@ class TestDescribeUnreachable:
 class TestSignInReportsTheRealProblem:
     def test_a_closed_port_does_not_look_like_a_bad_token(self, unused_port):
         """The failure users hit first: right credentials, wrong address."""
-        client = LabNexusClient(f"http://127.0.0.1:{unused_port}", timeout=2)
+        # Well above 2s: Windows retries a refused connect for ~2s before giving up,
+        # so a tighter timeout turns "refused" into "timed out" there.
+        client = LabNexusClient(f"http://127.0.0.1:{unused_port}", timeout=10)
 
         with pytest.raises(AuthError) as caught:
             client.authenticate_pyprobe("me@lab.org", PYPROBE_TOKEN)
