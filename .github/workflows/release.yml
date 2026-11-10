@@ -44,13 +44,22 @@ jobs:
         shell: bash
 
     steps:
+      - name: Check submodule token
+        env:
+          PLATE_PARSERS_TOKEN: ${{ secrets.PLATE_PARSERS_TOKEN }}
+        run: |
+          if [ -z "$PLATE_PARSERS_TOKEN" ]; then
+            echo "::error::Repository secret PLATE_PARSERS_TOKEN is not set (or not available to this run). See README > Releasing."
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
         with:
           # vendor/labnexus_plate_parsers is a private submodule; the default
           # token can't read it. Add a fine-grained PAT with read access to
           # that repo as the PLATE_PARSERS_TOKEN repository secret.
           submodules: recursive
-          token: ${{ secrets.PLATE_PARSERS_TOKEN || github.token }}
+          token: ${{ secrets.PLATE_PARSERS_TOKEN }}
 
       - name: Install Tk (Linux)
         if: runner.os == 'Linux'
