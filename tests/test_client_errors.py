@@ -58,6 +58,15 @@ class TestDescribeUnreachable:
 
         assert "nothing is listening" in describe_unreachable(URL, exc)
 
+    def test_a_refused_connection_on_windows_says_nothing_is_listening(self):
+        exc = requests.exceptions.ConnectionError(
+            "Max retries exceeded ... (Caused by NewConnectionError('...: "
+            "Failed to establish a new connection: [WinError 10061] No connection "
+            "could be made because the target machine actively refused it'))"
+        )
+
+        assert "nothing is listening" in describe_unreachable(URL, exc)
+
     def test_an_unresolvable_host_says_so(self):
         exc = requests.exceptions.ConnectionError(
             "Caused by NameResolutionError(\"Failed to resolve 'lab.example.com'\")"

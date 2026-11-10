@@ -64,7 +64,9 @@ def describe_unreachable(url: str, exc: Exception) -> str:
     if "NameResolutionError" in text or "Failed to resolve" in text or "nodename nor" in text:
         return f"Could not reach {url}: that hostname does not resolve. Check the address."
 
-    if "Connection refused" in text:
+    # Linux/macOS say "Connection refused"; Windows says "[WinError 10061] ...
+    # the target machine actively refused it".
+    if "Connection refused" in text or "actively refused" in text or "WinError 10061" in text:
         return (
             f"Could not reach {url}: nothing is listening on that port. Check the "
             "server is running, and that the port is the one it serves on."
