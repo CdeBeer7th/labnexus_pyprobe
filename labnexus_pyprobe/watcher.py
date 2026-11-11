@@ -277,8 +277,8 @@ class Watcher:
         try:
             structured = parse_plate_reader(queue.model, path.read_bytes(), path.name)
         except UnsupportedFileType as exc:
-            # Reachable when the user pins explicit --pattern globs that let
-            # through a file the instrument never exports.
+            # Queue.matches already filters on extension; this is a backstop
+            # should the parser's list of extensions ever disagree with it.
             self.stats.failed += 1
             self.emit("failed", f"Skipping {path.name}", path=path, detail=str(exc), queue=queue)
             return None

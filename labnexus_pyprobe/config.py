@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from labnexus_plate_parsers import SpectrometerModel, patterns_for
+from labnexus_plate_parsers import SpectrometerModel, extensions_for, patterns_for
 
 #: Files that are almost never real experimental data.
 DEFAULT_EXCLUDES = (
@@ -86,11 +86,27 @@ class Queue:
         a Tecan Spark folder should pick up ``*.xlsx`` without the user having
         to know that, and should not try to upload the operator's stray notes.
         """
+        # Explicit patterns narrow what is matched; they cannot widen an
+        # instrument queue past its extensions (see ``accepts_extension``).
         if self.patterns:
             return self.patterns
         if self.model is not None:
             return list(patterns_for(self.model))
         return ["*"]
+
+    def accepts_extension(self, name: str) -> bool:
+        """Whether *name*'s dot extension is one this queue's instrument exports.
+
+        Mirrors the parser's own check (last ``.``-suffix, case-insensitive),
+        so ``RUN.XLSX`` from a Windows bench is accepted on any OS, and a file
+        with no extension or the wrong one is never picked up - even when an
+        explicit ``--pattern`` would have let it through.
+        """
+        if self.model is None:
+            return True
+        if "." not in name:
+            return False
+        return name.rsplit(".", 1)[-1].lower() in extensions_for(self.model)
 
     def matches(self, path: Path, state_file: Path | None = None) -> bool:
         """Whether *path* is a file this queue should upload."""
@@ -99,9 +115,16 @@ class Queue:
         if state_file is not None and _same_file(path, state_file):
             return False
         name = path.name
-        if any(fnmatch.fnmatch(name, pattern) for pattern in self.excludes):
+        if not self.accepts_extension(name):
             return False
-        return any(fnmatch.fnmatch(name, pattern) for pattern in self.effective_patterns)
+        # Case-insensitive on every OS, as Windows already is: instrument PCs
+        # write RUN.XLSX as readily as run.xlsx.
+        folded = name.lower()
+        if any(fnmatch.fnmatchcase(folded, pattern.lower()) for pattern in self.excludes):
+            return False
+        return any(
+            fnmatch.fnmatchcase(folded, pattern.lower()) for pattern in self.effective_patterns
+        )
 
     def iter_candidates(self, state_file: Path | None = None) -> list[Path]:
         """All files under this queue's directory that pass its filters."""

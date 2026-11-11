@@ -79,6 +79,33 @@ class TestQueuePatterns:
         )
         assert queue.effective_patterns == ["*.dat"]
 
+    def test_explicit_patterns_cannot_widen_past_the_extensions(self, tmp_path: Path):
+        queue = Queue(
+            directory=tmp_path, model=SpectrometerModel.tecanSpark, patterns=["*"]
+        )
+        assert queue.matches(tmp_path / "run.xlsx")
+        assert not queue.matches(tmp_path / "notes.txt")
+        assert not queue.matches(tmp_path / "README")
+
+    def test_explicit_patterns_can_narrow(self, tmp_path: Path):
+        queue = Queue(
+            directory=tmp_path, model=SpectrometerModel.tecanSpark, patterns=["plate_*"]
+        )
+        assert queue.matches(tmp_path / "plate_01.xlsx")
+        assert not queue.matches(tmp_path / "other.xlsx")
+
+    @pytest.mark.parametrize("name", ["RUN.XLSX", "Run.Xls", "run.xLsX"])
+    def test_extension_case_is_ignored(self, tmp_path: Path, name: str):
+        queue = Queue(directory=tmp_path, model=SpectrometerModel.tecanSpark)
+        assert queue.matches(tmp_path / name)
+
+    @pytest.mark.parametrize(
+        "name", ["run", "run.", "run.xlsx.bak", "run.xlsx.txt", "runxlsx", "run.csv"]
+    )
+    def test_wrong_or_missing_extension_is_skipped(self, tmp_path: Path, name: str):
+        queue = Queue(directory=tmp_path, model=SpectrometerModel.tecanSpark)
+        assert not queue.matches(tmp_path / name)
+
     def test_a_plain_queue_takes_everything(self, tmp_path: Path):
         assert Queue(directory=tmp_path).effective_patterns == ["*"]
 

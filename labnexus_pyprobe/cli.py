@@ -42,16 +42,16 @@ examples:
   labnexus-pyprobe
 
   # watch a folder, prompt for credentials, live terminal dashboard
-  labnexus-pyprobe ~/data lab.example.com:8000
+  labnexus-pyprobe ~/data lab.example.com:8000 -m tecan-spark
 
-  # only CSV and TXT files, including subfolders, checked every 30s
-  labnexus-pyprobe -d ~/data -s lab.example.com -p '*.csv' -p '*.txt' -r -i 30
+  # including subfolders, checked every 30s
+  labnexus-pyprobe -d ~/data -s lab.example.com -m tecan-spark -r -i 30
 
   # desktop window, prefilled with a folder and server
   labnexus-pyprobe --gui -d ~/data -s lab.example.com:8000
 
   # see what would be uploaded without sending anything
-  labnexus-pyprobe ~/data lab.example.com --dry-run
+  labnexus-pyprobe ~/data lab.example.com -m tecan-spark --dry-run
 
   # one folder per instrument, each parsed at the bench before upload
   labnexus-pyprobe -s lab.example.com -w WORKSPACE_ID \\
@@ -71,7 +71,7 @@ examples:
 
   # unattended, logging to a file, credentials from the environment
   LABNEXUS_PASSWORD=... labnexus-pyprobe ~/data lab.example.com \\
-      -e me@lab.org --plain --log-file ~/pyprobe.log
+      -e me@lab.org -m tecan-spark --plain --log-file ~/pyprobe.log
 """
 
 
@@ -183,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH=MODEL",
         help=(
             "watch PATH for exports from MODEL; repeatable, one per instrument. "
-            "MODEL is any spelling of a supported model (see --list-models)"
+            "MODEL is required: any spelling of a supported model (see --list-models)"
         ),
     )
     spec.add_argument(
@@ -214,7 +214,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="GLOB",
-        help="only upload files matching GLOB; repeatable (default: *)",
+        help=(
+            "only upload files matching GLOB; repeatable. Narrows, never widens, "
+            "the instrument's own extensions (default: those extensions)"
+        ),
     )
     watch.add_argument(
         "-x",
@@ -311,8 +314,8 @@ def parse_queue_spec(
 ) -> tuple[Path, SpectrometerModel | None]:
     """Split one ``--queue PATH=MODEL`` value.
 
-    The model half is optional (``--queue ~/misc`` watches a folder with no
-    parsing), and ``rsplit`` is deliberate so a Windows path such as
+    A missing model half yields ``None``; ``build_queues`` rejects that for
+    the terminal front ends, and the GUI asks for it. ``rpartition`` is deliberate so a Windows path such as
     ``C:\\data=tecan-spark`` splits on the right ``=``.
     """
     raw_path, sep, raw_model = spec.rpartition("=")
@@ -379,6 +382,12 @@ def build_queues(
         for queue in queues:
             if not queue.directory.is_dir():
                 parser.error(f"not a directory: {queue.directory}")
+            # The GUI asks for a missing instrument itself before it starts.
+            if queue.model is None:
+                parser.error(
+                    f"no instrument for {queue.directory} (use --queue PATH=MODEL, "
+                    "--spectrometer MODEL or LABNEXUS_SPECTROMETER; see --list-models)"
+                )
 
     return queues
 

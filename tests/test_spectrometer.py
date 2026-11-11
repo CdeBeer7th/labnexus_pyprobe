@@ -122,21 +122,21 @@ class TestParseFailures:
         watcher.scan_once()
         assert watcher.stats.uploaded == 1
 
-    def test_a_wrong_extension_is_reported_not_uploaded(
+    def test_a_wrong_extension_is_never_picked_up(
         self, server, tmp_path, spectrometer_uploads
     ):
         (tmp_path / "run.txt").write_text("nope")
         watcher, events = make(
             server,
             tmp_path,
-            # An explicit pattern lets through a file the instrument never exports.
+            # Even an explicit pattern cannot let in a file the instrument never exports.
             [Queue(directory=tmp_path, model=SpectrometerModel.tecanSpark, patterns=["*.txt"])],
         )
         watcher.scan_once()
 
         assert spectrometer_uploads == []
-        failure = next(e for e in events if e.kind == "failed")
-        assert "expected xlsx/xls" in failure.detail
+        assert watcher.stats.failed == 0
+        assert not any(e.path and e.path.name == "run.txt" for e in events)
 
 
 class TestDryRun:

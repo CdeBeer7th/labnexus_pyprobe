@@ -44,9 +44,10 @@ STATUS_TAGS = {
     "parsed": ("parsed", ACCENT),
 }
 
-#: Shown in the per-queue instrument dropdown; "" means upload without parsing.
-NO_MODEL = "(no parsing - upload as-is)"
-MODEL_CHOICES = [NO_MODEL] + [m.value for m in SpectrometerModel]
+#: Placeholder in the per-queue instrument dropdown. It is not a valid choice:
+#: every folder must name its instrument before syncing can start.
+NO_MODEL = "Select instrument..."
+MODEL_CHOICES = [m.value for m in SpectrometerModel]
 
 
 @dataclass
@@ -404,7 +405,7 @@ class ProbeWindow(tk.Tk):
         watch.columnconfigure(0, weight=1)
         ttk.Label(
             watch,
-            text="one folder per instrument - each is parsed before upload",
+            text="one folder per instrument - pick the instrument for each folder",
             style="Hint.TLabel",
         ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
@@ -784,7 +785,10 @@ class ProbeWindow(tk.Tk):
                 return None
 
             choice = record["model"].get()
-            model = None if choice == NO_MODEL else resolve_model(choice)
+            if choice not in MODEL_CHOICES:
+                self._set_status(f"Select the instrument for {folder}.", ERR)
+                return None
+            model = resolve_model(choice)
             queues.append(
                 Queue(
                     directory=folder,

@@ -2,12 +2,12 @@
 
 Automatic experimental-data sync for your [LabNexus](https://github.com/CdeBeer7th/labnexus_server) server.
 
-Point pyProbe at a folder, give it your server, and it uploads new files as they appear —
-in a live terminal dashboard, a desktop window, or silently in the background.
-
-Give a folder a **spectrometer** and it does more: the plate-reader export is parsed at
-the bench into a structured, validated document and uploaded as data, not just as a file.
-One folder per instrument, as many as you have readers.
+Point pyProbe at a folder, tell it which **spectrometer** writes there, give it your
+server, and it uploads new exports as they appear — in a live terminal dashboard, a
+desktop window, or silently in the background. Each plate-reader export is parsed at the
+bench into a structured, validated document and uploaded as data, not just as a file.
+One folder per instrument, as many as you have readers. Every folder must name its
+instrument; pyProbe will not start syncing a folder without one.
 
 ```
 ╭─ pyProbe ───────────────────────────────────────────────────────────────╮
@@ -87,7 +87,7 @@ labnexus-pyprobe
 Or give it both up front and stay in the terminal:
 
 ```bash
-labnexus-pyprobe ~/data lab.example.com:8000
+labnexus-pyprobe ~/data lab.example.com:8000 -m tecan-spark
 ```
 
 pyProbe asks for your LabNexus email and password, opens a session, and starts watching.
@@ -99,21 +99,21 @@ see [Signing in unattended](#signing-in-unattended) below.
 A few common variations:
 
 ```bash
-# only CSV and TXT, including subfolders, scanned every 30 seconds
-labnexus-pyprobe -d ~/data -s lab.example.com -p '*.csv' -p '*.txt' -r -i 30
+# including subfolders, scanned every 30 seconds
+labnexus-pyprobe -d ~/data -s lab.example.com -m tecan-spark -r -i 30
 
 # desktop window with the form already filled in
 labnexus-pyprobe --gui -d ~/data -s lab.example.com:8000
 
 # see what would be uploaded, send nothing
-labnexus-pyprobe ~/data lab.example.com --dry-run
+labnexus-pyprobe ~/data lab.example.com -m tecan-spark --dry-run
 
 # unattended: a pyProbe token, no prompts, plain log output to a file
 LABNEXUS_PYPROBE_TOKEN=lnxp_... labnexus-pyprobe ~/data lab.example.com \
-    -e me@lab.org --plain --log-file ~/pyprobe.log
+    -e me@lab.org -m tecan-spark --plain --log-file ~/pyprobe.log
 
 # check the server and your credentials, then exit
-labnexus-pyprobe ~/data lab.example.com --check
+labnexus-pyprobe ~/data lab.example.com -m tecan-spark --check
 ```
 
 ### Signing in unattended
@@ -177,8 +177,10 @@ What this changes:
   time/wavelength axes — and sent alongside the original file. The server re-validates it
   and files both.
 - **A queue only picks up its instrument's exports.** A Tecan Spark folder matches
-  `*.xlsx`/`*.xls` and a SpectraMax folder matches `*.txt`, without you saying so. An
-  explicit `-p/--pattern` still overrides it.
+  `*.xlsx`/`*.xls` and a SpectraMax folder matches `*.txt`, without you saying so. The
+  file name's dot extension is checked case-insensitively (`RUN.XLSX` counts), and a file
+  with no extension or any other one is never picked up. An explicit `-p/--pattern` can
+  narrow that (`-p 'plate_*'`) but not widen it.
 - **A file that won't parse is never uploaded.** It's reported and retried on the next
   scan, so a half-written export sorts itself out once the instrument finishes.
 - **`--dry-run` still parses**, so you can see exactly what a folder produces before
@@ -211,7 +213,9 @@ resolve to the same instrument.
 **Pyprobe** workspace, creating it the first time one arrives — which is what you want on
 a bench where nobody is choosing a destination. Pass `--workspace` to send a particular
 reader's output somewhere specific; `--list-workspaces` prints the ids you can use.
-Folders given without an instrument are uploaded as plain files, as before.
+Every folder needs an instrument: a `--queue PATH` with no `=MODEL`, or a `DIRECTORY`
+without `--spectrometer` (or `LABNEXUS_SPECTROMETER`), is refused before anything is
+watched.
 
 Run `labnexus-pyprobe --help` for the full list of options.
 
@@ -255,6 +259,9 @@ editing the server, email, password or token drops it too — those details no l
 match the session in hand, so pyProbe asks you to sign in again rather than uploading
 under the old one. Pressing **Start** without signing in first signs in and then starts.
 
+Every folder in the **Queues** card needs its instrument picked from the dropdown;
+**Start** refuses to begin until each one has.
+
 Running `--gui` with `--email` and `--pyprobe-token` (or `LABNEXUS_EMAIL` and
 `LABNEXUS_PYPROBE_TOKEN`) signs in as soon as the window opens.
 
@@ -263,7 +270,9 @@ Desktop notifications are on by default and use whatever the OS provides
 
 ### Choosing what gets uploaded
 
-- `-p/--pattern` — glob(s) to include; repeat the flag for several. Default: everything.
+- `-p/--pattern` — glob(s) to include; repeat the flag for several. Matched
+  case-insensitively, and only within the instrument's own extensions. Default: those
+  extensions.
 - `-x/--exclude` — glob(s) to skip, on top of the built-in list (dotfiles, `*.tmp`,
   `*.part`, Office lock files, …). `--no-default-excludes` drops the built-ins.
 - `-r/--recursive` — also watch subdirectories.

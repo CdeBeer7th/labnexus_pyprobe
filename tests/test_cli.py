@@ -14,7 +14,7 @@ def parse(*argv):
 
 
 def test_positional_args_still_work(tmp_path):
-    parser, args = parse(str(tmp_path), "lab.example.com:8000")
+    parser, args = parse(str(tmp_path), "lab.example.com:8000", "-m", "tecan-spark")
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == tmp_path
     assert settings.server == "https://lab.example.com:8000"
@@ -23,7 +23,8 @@ def test_positional_args_still_work(tmp_path):
 def test_flags_override_positionals(tmp_path):
     other = tmp_path / "other"
     other.mkdir()
-    parser, args = parse(str(tmp_path), "a.example", "-d", str(other), "-s", "b.example")
+    parser, args = parse(str(tmp_path), "a.example", "-d", str(other), "-s", "b.example",
+                         "-m", "tecan-spark")
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == other
     assert settings.server == "https://b.example"
@@ -32,6 +33,7 @@ def test_flags_override_positionals(tmp_path):
 def test_env_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("LABNEXUS_DIR", str(tmp_path))
     monkeypatch.setenv("LABNEXUS_SERVER", "env.example:9000")
+    monkeypatch.setenv("LABNEXUS_SPECTROMETER", "tecan-spark")
     parser, args = parse()
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].directory == tmp_path
@@ -46,7 +48,7 @@ def test_plain_http_is_refused_by_default(tmp_path):
 
 def test_https_override_allows_plain_http(tmp_path):
     parser, args = parse(
-        str(tmp_path), "lab.example.com:8000", "--scheme", "http", "--https-override", "true",
+        str(tmp_path), "lab.example.com:8000", "--scheme", "http", "--https-override", "true", "-m", "tecan-spark",
     )
     settings = build_settings(args, parser, "plain")
     assert settings.server == "http://lab.example.com:8000"
@@ -55,7 +57,7 @@ def test_https_override_allows_plain_http(tmp_path):
 def test_patterns_excludes_and_scheme(tmp_path):
     parser, args = parse(
         str(tmp_path), "lab.example", "-p", "*.csv", "-p", "*.txt",
-        "-x", "draft_*", "--scheme", "https", "-r", "-i", "30",
+        "-x", "draft_*", "--scheme", "https", "-r", "-i", "30", "-m", "tecan-spark",
     )
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].effective_patterns == ["*.csv", "*.txt"]
@@ -65,7 +67,8 @@ def test_patterns_excludes_and_scheme(tmp_path):
 
 
 def test_no_default_excludes(tmp_path):
-    parser, args = parse(str(tmp_path), "lab.example", "--no-default-excludes", "-x", "*.bak")
+    parser, args = parse(str(tmp_path), "lab.example", "--no-default-excludes", "-x", "*.bak",
+                         "-m", "tecan-spark")
     settings = build_settings(args, parser, "plain")
     assert settings.queues[0].excludes == ["*.bak"]
 
@@ -83,7 +86,7 @@ def test_gui_tolerates_missing_arguments():
 
 
 def test_no_state_disables_history(tmp_path):
-    parser, args = parse(str(tmp_path), "lab.example", "--no-state")
+    parser, args = parse(str(tmp_path), "lab.example", "--no-state", "-m", "tecan-spark")
     assert build_settings(args, parser, "plain").state_file is None
 
 
@@ -180,25 +183,40 @@ class TestSpectrometerQueues:
             SpectrometerModel.biotekEpoch2,
         ]
 
-    def test_a_queue_without_a_model_is_a_plain_folder(self, tmp_path):
+    @pytest.mark.parametrize("ui", ["plain", "tui"])
+    def test_a_queue_without_a_model_is_an_error(self, tmp_path, ui, capsys):
         parser, args = parse("-s", "lab.example", "-Q", str(tmp_path))
-        settings = build_settings(args, parser, "plain")
-        assert settings.queues[0].model is None
-        assert settings.queues[0].effective_patterns == ["*"]
+        with pytest.raises(SystemExit):
+            build_settings(args, parser, ui)
+        assert "no instrument" in capsys.readouterr().err
+
+    def test_a_directory_without_a_model_is_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("LABNEXUS_SPECTROMETER", raising=False)
+        parser, args = parse(str(tmp_path), "lab.example")
+        with pytest.raises(SystemExit):
+            build_settings(args, parser, "plain")
+
+    def test_the_gui_takes_a_folder_without_a_model(self, tmp_path):
+        """The window asks for the instrument itself before it starts."""
+        parser, args = parse("-s", "lab.example", "-Q", str(tmp_path))
+        assert build_settings(args, parser, "gui").queues[0].model is None
 
     def test_spectrometer_flag_applies_to_the_positional_folder(self, tmp_path):
         parser, args = parse(str(tmp_path), "lab.example", "-m", "spectramax-190", "-w", "WS")
         settings = build_settings(args, parser, "plain")
         assert settings.queues[0].model is SpectrometerModel.spectraMax190
 
-    def test_queues_and_a_plain_directory_coexist(self, tmp_path):
-        spark, misc = tmp_path / "spark", tmp_path / "misc"
+    def test_queues_and_a_directory_coexist(self, tmp_path):
+        spark, epoch = tmp_path / "spark", tmp_path / "epoch"
         spark.mkdir()
-        misc.mkdir()
+        epoch.mkdir()
         parser, args = parse("-s", "lab.example", "-w", "WS", "-Q", f"{spark}=tecanSpark",
-                             "-d", str(misc))
+                             "-d", str(epoch), "-m", "biotek-epoch-2")
         settings = build_settings(args, parser, "plain")
-        assert [q.model for q in settings.queues] == [SpectrometerModel.tecanSpark, None]
+        assert [q.model for q in settings.queues] == [
+            SpectrometerModel.tecanSpark,
+            SpectrometerModel.biotekEpoch2,
+        ]
 
     def test_unknown_model_is_an_error(self, tmp_path):
         parser, args = parse("-s", "lab.example", "-Q", f"{tmp_path}=Hitachi U-2000")
@@ -208,10 +226,6 @@ class TestSpectrometerQueues:
     def test_a_spectrometer_queue_needs_no_workspace(self, tmp_path):
         """The server files a workspace-less run under Pyprobe, so this is fine."""
         parser, args = parse("-s", "lab.example", "-Q", f"{tmp_path}=tecanSpark")
-        assert build_settings(args, parser, "plain").workspace_id is None
-
-    def test_a_plain_queue_needs_no_workspace(self, tmp_path):
-        parser, args = parse("-s", "lab.example", "-Q", str(tmp_path))
         assert build_settings(args, parser, "plain").workspace_id is None
 
     def test_workspace_falls_back_to_the_environment(self, tmp_path, monkeypatch):
@@ -314,5 +328,5 @@ class TestPyProbeToken:
 
         monkeypatch.setattr(cli, "resolve_ui", lambda *a, **k: "plain")
         monkeypatch.setattr(cli, "run_plain", fake_run_plain)
-        assert cli.main([str(tmp_path), "lab.example"]) == 0
+        assert cli.main([str(tmp_path), "lab.example", "-m", "tecan-spark"]) == 0
         assert seen == {"email": "me@lab.org", "pyprobe_token": "lnxp_from-env"}
